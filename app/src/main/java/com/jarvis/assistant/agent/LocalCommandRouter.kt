@@ -180,7 +180,12 @@ object LocalCommandRouter {
             val appName = openMatch.groupValues[1].trim()
             if (appName !in setOf("notifications", "quick settings")) {
                 return single("open_app", JSONObject().put("app_name", appName)) { res, title ->
-                    if (res.success) "${res.output} At your service, $title." else res.output
+                    if (res.success) {
+                        val clean = res.output.substringBefore("\n\nCURRENT SCREEN:").trim()
+                        "$clean At your service, $title."
+                    } else {
+                        res.output
+                    }
                 }
             }
         }

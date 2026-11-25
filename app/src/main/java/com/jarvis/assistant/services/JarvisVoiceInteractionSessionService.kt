@@ -2,7 +2,6 @@ package com.jarvis.assistant.services
 
 import android.content.Context
 import android.graphics.Color
-import android.graphics.Region
 import android.os.Build
 import android.os.Bundle
 import android.service.voice.VoiceInteractionSession
@@ -22,15 +21,14 @@ class JarvisVoiceInteractionSessionService : VoiceInteractionSessionService() {
 
 /**
  * Native Android System Default Digital Assistant session.
- * Triggered directly when holding the Xiaomi 15T Pro Power Button or swiping the assistant corner.
- * Renders the 144Hz Iron Man wake overlay right over whatever app is open (even on Lock Screen).
+ * Triggered when holding the Xiaomi 15T Pro Power Button.
+ * When screen/app piloting begins, hides cleanly while JarvisTaskCoordinator completes
+ * multi-step interactions on the unobstructed underlying app.
  */
 class JarvisVoiceInteractionSession(context: Context) : VoiceInteractionSession(context) {
 
     private var overlayView: StarkAssistOverlayView? = null
     private var controller: JarvisAssistController? = null
-    @Volatile
-    private var pilotPassThrough: Boolean = false
 
     override fun onCreateContentView(): View {
         val view = StarkAssistOverlayView(context)
@@ -45,19 +43,17 @@ class JarvisVoiceInteractionSession(context: Context) : VoiceInteractionSession(
         val view = overlayView ?: return
         val app = context.applicationContext as? JarvisApplication ?: return
 
-        controller?.stopSession()
+        controller?.detachOverlayOnly()
         controller = JarvisAssistController(
             context = context,
             container = app.container,
             overlayView = view,
-            onPilotPassThroughChanged = { active ->
-                pilotPassThrough = active
-                view.post {
-                    applyFrostedBlur(enabled = !active)
-                    view.requestLayout()
-                }
+            onDismissImmediate = {
+                applyFrostedBlur(enabled = false)
+                hide()
             },
             onDismissComplete = {
+                applyFrostedBlur(enabled = false)
                 hide()
             }
         )
@@ -65,14 +61,14 @@ class JarvisVoiceInteractionSession(context: Context) : VoiceInteractionSession(
     }
 
     override fun onHide() {
-        pilotPassThrough = false
-        controller?.stopSession()
+        // Detach UI only — never kill an active multi-step screen pilot running in JarvisTaskCoordinator
+        controller?.detachOverlayOnly()
         controller = null
         super.onHide()
     }
 
     override fun onDestroy() {
-        controller?.stopSession()
+        controller?.detachOverlayOnly()
         controller = null
         overlayView = null
         super.onDestroy()
@@ -80,16 +76,8 @@ class JarvisVoiceInteractionSession(context: Context) : VoiceInteractionSession(
 
     override fun onComputeInsets(outInsets: Insets) {
         super.onComputeInsets(outInsets)
-        val view = overlayView ?: return
-        if (pilotPassThrough) {
-            // 100% click-through while J.A.R.V.I.S. Accessibility Pilot taps/scrolls the app underneath
-            outInsets.touchableInsets = Insets.TOUCHABLE_INSETS_REGION
-            outInsets.touchableRegion.set(Region())
-            outInsets.contentInsets.set(0, view.height, 0, 0)
-        } else {
-            outInsets.touchableInsets = Insets.TOUCHABLE_INSETS_FRAME
-            outInsets.contentInsets.set(0, 0, 0, 0)
-        }
+        outInsets.touchableInsets = Insets.TOUCHABLE_INSETS_FRAME
+        outInsets.contentInsets.set(0, 0, 0, 0)
     }
 
     private fun configureFullBleedWindow() {

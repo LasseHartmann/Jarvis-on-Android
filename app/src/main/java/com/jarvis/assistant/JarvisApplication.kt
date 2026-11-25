@@ -9,6 +9,7 @@ import com.jarvis.assistant.agent.JarvisSettings
 import com.jarvis.assistant.agent.JarvisState
 import com.jarvis.assistant.agent.LlmClient
 import com.jarvis.assistant.agent.OpenAiCompatibleLlmClient
+import com.jarvis.assistant.assist.JarvisTaskCoordinator
 import com.jarvis.assistant.data.JarvisDatabaseHelper
 import com.jarvis.assistant.data.JarvisRepository
 import com.jarvis.assistant.data.SecureSettingsStore
@@ -26,9 +27,23 @@ class JarvisAppContainer(context: Context) {
     val repository = JarvisRepository(dbHelper)
     val telemetryMonitor = DeviceTelemetryMonitor(appContext)
     val installedAppsRepository = InstalledAppsRepository(appContext)
-    val toolRegistry = ToolRegistry(appContext, installedAppsRepository, telemetryMonitor, repository)
     val soundEffects = StarkSoundEffects { settingsStore.current().soundEffectsEnabled }
     val voiceEngine = JarvisVoiceEngine(appContext)
+
+    lateinit var taskCoordinator: JarvisTaskCoordinator
+        private set
+
+    val toolRegistry = ToolRegistry(
+        context = appContext,
+        appsRepo = installedAppsRepository,
+        telemetryMonitor = telemetryMonitor,
+        store = repository,
+        prepareScreenForPilot = {
+            if (::taskCoordinator.isInitialized) {
+                taskCoordinator.dismissOverlayForScreenPilot()
+            }
+        }
+    )
 
     val orchestrator = JarvisOrchestrator(
         toolExecutor = toolRegistry,
@@ -44,6 +59,16 @@ class JarvisAppContainer(context: Context) {
             }
         }
     )
+
+    init {
+        taskCoordinator = JarvisTaskCoordinator(
+            orchestrator = orchestrator,
+            repository = repository,
+            settingsStore = settingsStore,
+            voiceEngine = voiceEngine,
+            soundEffects = soundEffects
+        )
+    }
 
     private fun createLlmClient(settings: JarvisSettings): LlmClient? = when (settings.provider) {
         AiProvider.GEMINI -> {

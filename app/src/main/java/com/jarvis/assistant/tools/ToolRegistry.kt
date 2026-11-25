@@ -17,7 +17,8 @@ class ToolRegistry(
     context: Context,
     appsRepo: InstalledAppsRepository,
     telemetryMonitor: DeviceTelemetryMonitor,
-    store: JarvisStore
+    store: JarvisStore,
+    prepareScreenForPilot: suspend () -> Unit = {}
 ) : ToolExecutor {
 
     private val tools: Map<String, JarvisTool>
@@ -34,16 +35,16 @@ class ToolRegistry(
             OpenSystemPanelTool(context),
             // App & Web Navigation
             ListInstalledAppsTool(appsRepo),
-            OpenAppTool(appsRepo),
-            OpenUrlTool(context),
-            WebSearchTool(context),
+            OpenAppTool(appsRepo, prepareScreenForPilot),
+            OpenUrlTool(context, prepareScreenForPilot),
+            WebSearchTool(context, prepareScreenForPilot),
             // Accessibility Screen Pilot
-            ReadScreenTool(),
-            TapElementTool(),
-            TapCoordinatesTool(),
-            TypeTextTool(),
-            ScrollScreenTool(),
-            GlobalActionTool(),
+            ReadScreenTool(prepareScreenForPilot),
+            TapElementTool(prepareScreenForPilot),
+            TapCoordinatesTool(prepareScreenForPilot),
+            TypeTextTool(prepareScreenForPilot),
+            ScrollScreenTool(prepareScreenForPilot),
+            GlobalActionTool(prepareScreenForPilot),
             WaitBrieflyTool(),
             // Communications & Notifications
             FindContactTool(context),

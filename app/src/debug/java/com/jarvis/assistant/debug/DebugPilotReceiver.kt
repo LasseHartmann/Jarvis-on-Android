@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import com.jarvis.assistant.JarvisApplication
 import com.jarvis.assistant.services.JarvisAccessibilityService
 import com.jarvis.assistant.services.ScreenTreeSerializer
 import kotlinx.coroutines.CoroutineScope
@@ -56,6 +57,17 @@ class DebugPilotReceiver : BroadcastReceiver() {
                         val dir = intent.getStringExtra("dir") ?: "down"
                         val (ok, msg) = svc.scrollScreen(dir)
                         Log.i(TAG, "RESULT_SCROLL: ok=$ok msg=$msg")
+                    }
+
+                    "dismiss_and_read" -> {
+                        val app = context.applicationContext as? JarvisApplication
+                        app?.container?.taskCoordinator?.dismissOverlayForScreenPilot()
+                        val snap = svc.captureScreenSnapshot()
+                        if (snap == null) {
+                            Log.w(TAG, "RESULT_DISMISS_READ: returned null")
+                        } else {
+                            Log.i(TAG, "RESULT_DISMISS_READ: pkg=${snap.packageName} nodes=${snap.nodes.size}\n${ScreenTreeSerializer.formatForLlm(snap, maxNodes = 15)}")
+                        }
                     }
 
                     else -> Log.w(TAG, "RESULT: unknown action=$action")

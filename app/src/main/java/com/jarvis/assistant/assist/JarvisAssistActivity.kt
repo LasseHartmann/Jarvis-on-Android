@@ -1,5 +1,6 @@
 package com.jarvis.assistant.assist
 
+import android.content.Intent
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
@@ -9,11 +10,12 @@ import androidx.core.view.WindowCompat
 import com.jarvis.assistant.JarvisApplication
 
 /**
- * Pure voice-only translucent Stark HUD overlay activity.
- * Launched via Quick Settings Tile, ACTION_ASSIST / ACTION_VOICE_COMMAND, or Settings "Test Wake" button.
+ * Pure voice-only translucent minimalist wake overlay activity.
+ * Launched via Quick Settings Tile, ACTION_ASSIST / ACTION_VOICE_COMMAND, or Settings "Preview wake".
  */
 class JarvisAssistActivity : ComponentActivity() {
 
+    private var overlayView: StarkAssistOverlayView? = null
     private var controller: JarvisAssistController? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -30,29 +32,34 @@ class JarvisAssistActivity : ComponentActivity() {
         }
         applyFrostedBlur(enabled = true)
 
-        val overlayView = StarkAssistOverlayView(this)
-        setContentView(overlayView)
+        val view = StarkAssistOverlayView(this)
+        overlayView = view
+        setContentView(view)
 
+        startNewSession(view)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        overlayView?.let { view ->
+            controller?.detachOverlayOnly()
+            applyFrostedBlur(enabled = true)
+            startNewSession(view)
+        }
+    }
+
+    private fun startNewSession(view: StarkAssistOverlayView) {
         val container = (application as JarvisApplication).container
-        controller = JarvisAssistController(
+        val ctrl = JarvisAssistController(
             context = this,
             container = container,
-            overlayView = overlayView,
-            onPilotPassThroughChanged = { passThrough ->
-                runOnUiThread {
-                    applyFrostedBlur(enabled = !passThrough)
-                    if (passThrough) {
-                        window.addFlags(
-                            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        )
-                    } else {
-                        window.clearFlags(
-                            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        )
-                    }
-                }
+            overlayView = view,
+            onDismissImmediate = {
+                applyFrostedBlur(enabled = false)
+                finish()
+                @Suppress("DEPRECATION")
+                overridePendingTransition(0, 0)
             },
             onDismissComplete = {
                 finish()
@@ -60,7 +67,8 @@ class JarvisAssistActivity : ComponentActivity() {
                 overridePendingTransition(0, 0)
             }
         )
-        controller?.startSession()
+        controller = ctrl
+        ctrl.startSession()
     }
 
     private fun applyFrostedBlur(enabled: Boolean) {
@@ -78,7 +86,7 @@ class JarvisAssistActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        controller?.stopSession()
+        controller?.detachOverlayOnly()
         controller = null
         super.onDestroy()
     }

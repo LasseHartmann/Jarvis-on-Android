@@ -69,4 +69,18 @@ class LocalCommandRouterTest {
         val plan = LocalCommandRouter.match("Open WhatsApp and tell Alex I will be 10 minutes late")
         assertNull(plan)
     }
+
+    @Test
+    fun openAppLocalReplyStripsCurrentScreenTree() {
+        val plan = LocalCommandRouter.match("Open WhatsApp")
+        assertNotNull(plan)
+        val rawToolResult = com.jarvis.assistant.agent.ToolResult(
+            toolCallId = "1",
+            toolName = "open_app",
+            success = true,
+            output = "Launched WhatsApp (com.whatsapp).\n\nCURRENT SCREEN:\nAPP: com.whatsapp\n#1 [Text] \"Thomas\""
+        )
+        val spoken = plan!!.composeReply(listOf(rawToolResult), "Sir")
+        assertEquals("Launched WhatsApp (com.whatsapp). At your service, Sir.", spoken)
+    }
 }

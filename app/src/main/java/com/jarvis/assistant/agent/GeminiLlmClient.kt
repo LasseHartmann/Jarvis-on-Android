@@ -115,18 +115,21 @@ class GeminiLlmClient(
             }
         }
 
+        val genConfig = JSONObject()
+            .put("temperature", 0.35)
+            .put("maxOutputTokens", 1024)
+        val cleanModel = model.trim().removePrefix("models/").lowercase()
+        if (cleanModel.startsWith("gemini-4") || cleanModel.startsWith("gemini-3")) {
+            genConfig.put("thinkingConfig", JSONObject().put("thinkingLevel", "LOW"))
+        }
+
         val root = JSONObject().apply {
             put(
                 "systemInstruction",
                 JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt)))
             )
             put("contents", contents)
-            put(
-                "generationConfig",
-                JSONObject()
-                    .put("temperature", 0.4)
-                    .put("maxOutputTokens", 1024)
-            )
+            put("generationConfig", genConfig)
         }
 
         if (tools.isNotEmpty()) {

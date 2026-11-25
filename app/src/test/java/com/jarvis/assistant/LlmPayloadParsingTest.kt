@@ -44,6 +44,10 @@ class LlmPayloadParsingTest {
         assertEquals("OBJECT", decl.getJSONObject("parameters").getString("type"))
         assertEquals("INTEGER", decl.getJSONObject("parameters").getJSONObject("properties").getJSONObject("percent").getString("type"))
 
+        // Gemini 4 models must specify thinkingLevel=LOW for fast voice responsiveness
+        val thinkingCfg = body.getJSONObject("generationConfig").getJSONObject("thinkingConfig")
+        assertEquals("LOW", thinkingCfg.getString("thinkingLevel"))
+
         val mockResponse = """
             {
               "candidates": [{

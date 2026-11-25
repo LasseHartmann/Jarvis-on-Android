@@ -9,16 +9,11 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import androidx.core.content.ContextCompat
 import com.jarvis.assistant.JarvisAppContainer
-import com.jarvis.assistant.agent.ChatMessage
-import com.jarvis.assistant.agent.JarvisSettings
 import com.jarvis.assistant.agent.JarvisState
-import com.jarvis.assistant.agent.MessageRole
 import com.jarvis.assistant.agent.PendingConfirmation
-import com.jarvis.assistant.voice.JarvisSpeechOptions
 import com.jarvis.assistant.voice.StarkCue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -68,40 +63,26 @@ class JarvisAssistController(
     private val context: Context,
     private val container: JarvisAppContainer,
     private val overlayView: StarkAssistOverlayView,
-    private val onPilotPassThroughChanged: (Boolean) -> Unit,
+    private val onDismissImmediate: () -> Unit,
     private val onDismissComplete: () -> Unit
-) {
+) : OverlaySessionHandle {
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private var commandJob: Job? = null
-    private var dismissed = false
+    private var visible = false
     private var awaitingVoiceConfirm = false
     private var isFollowUpTurn = false
 
-    private val passThroughTools = setOf(
-        "open_app", "open_url", "web_search", "open_system_panel",
-        "read_screen", "tap_element", "tap_coordinates", "type_text",
-        "scroll_screen", "global_action", "make_call"
-    )
-
-    private val exitAfterTools = setOf(
-        "open_app", "open_url", "web_search", "open_system_panel",
-        "make_call", "global_action"
-    )
-
     fun startSession() {
-        dismissed = false
+        visible = true
         awaitingVoiceConfirm = false
         isFollowUpTurn = false
 
+        container.taskCoordinator.attachOverlay(this)
+
         val settings = container.settingsStore.current()
         overlayView.configureTheme(settings.hudColorTheme)
-
-        val tel = container.telemetryMonitor.refresh()
-        val wattTag = if (tel.isCharging && tel.chargingWattsEstimate >= 1f) " ${"%.0f".format(tel.chargingWattsEstimate)}W" else ""
-        overlayView.updateTelemetry("BATT ${tel.batteryPercent}%$wattTag • ${"%.0f".format(tel.batteryTempC)}°C")
-
         overlayView.onCoreTap = ::handleCoreTap
-        overlayView.onBackdropTap = ::dismissGracefully
+        overlayView.onBackdropTap = ::dismissAndAbort
 
         triggerWakeHaptic()
         container.soundEffects.play(StarkCue.WAKE)
@@ -119,140 +100,45 @@ class JarvisAssistController(
         beginVoiceListening(isFollowUp = false)
     }
 
-    fun stopSession() {
-        dismissed = true
-        setPassThrough(false)
-        commandJob?.cancel()
-        container.orchestrator.abortCurrentTask()
-        container.voiceEngine.stopListening()
-        container.voiceEngine.stopSpeaking()
+    /**
+     * Detaches overlay UI cleanly when the window hides (e.g. during screen piloting)
+     * WITHOUT aborting an active multi-step phone control task in JarvisTaskCoordinator.
+     */
+    fun detachOverlayOnly() {
+        visible = false
+        container.taskCoordinator.detachOverlay(this)
+        if (!container.taskCoordinator.isTaskActive()) {
+            container.voiceEngine.stopListening()
+        }
         overlayView.stopAnimation()
         scope.cancel()
     }
 
-    private fun bindReactiveFlows() {
-        scope.launch {
-            container.voiceEngine.rmsLevel.collectLatest { rms ->
-                overlayView.setVoiceRms(rms)
-            }
-        }
-        scope.launch {
-            container.voiceEngine.partialTranscript.collectLatest { partial ->
-                if (partial.isNotBlank() && container.voiceEngine.isListening.value) {
-                    val sub = if (awaitingVoiceConfirm) "Say confirm or cancel" else ""
-                    overlayView.updateState(
-                        if (awaitingVoiceConfirm) JarvisState.AWAITING_AUTH else JarvisState.LISTENING,
-                        if (awaitingVoiceConfirm) "Confirmation" else "Listening",
-                        partial,
-                        sub
-                    )
-                }
-            }
-        }
-        scope.launch {
-            container.orchestrator.state.collectLatest { st ->
-                if (dismissed) return@collectLatest
-                val detail = container.orchestrator.statusDetail.value
-                when (st) {
-                    JarvisState.THINKING -> {
-                        overlayView.updateState(JarvisState.THINKING, "Thinking", "", "")
-                    }
+    override fun isOverlayVisible(): Boolean = visible
 
-                    JarvisState.EXECUTING -> {
-                        val needsPassThrough = passThroughTools.any { detail.contains(it, ignoreCase = true) }
-                        if (needsPassThrough) setPassThrough(true)
-                        val cleanAction = formatFriendlyStatus(detail)
-                        overlayView.updateState(JarvisState.EXECUTING, "Piloting", "", cleanAction)
-                    }
-
-                    else -> Unit
-                }
-            }
-        }
-        scope.launch {
-            container.orchestrator.pendingConfirmation.collectLatest { pending ->
-                if (pending != null && !dismissed) {
-                    handleVoiceConfirmationPrompt(pending)
-                }
-            }
-        }
+    override fun dismissForScreenPilot() {
+        if (!visible) return
+        visible = false
+        container.taskCoordinator.detachOverlay(this)
+        overlayView.stopAnimation()
+        scope.cancel()
+        onDismissImmediate()
     }
 
-    private fun beginVoiceListening(isFollowUp: Boolean) {
-        if (dismissed) return
-        isFollowUpTurn = isFollowUp
-        awaitingVoiceConfirm = false
-        setPassThrough(false)
-
-        val title = container.settingsStore.current().userTitle
-        overlayView.updateState(
-            JarvisState.LISTENING,
-            if (isFollowUp) "Listening" else "Listening",
-            if (isFollowUp) "Anything else, $title?" else "",
-            ""
-        )
-
-        container.voiceEngine.startListening(
-            onFinalResult = { spoken ->
-                if (dismissed) return@startListening
-                if (VoiceCommandClassifier.isDismissCommand(spoken)) {
-                    dismissGracefully()
-                } else {
-                    executeSpokenDirective(spoken)
-                }
-            },
-            onError = { errMsg ->
-                if (dismissed) return@startListening
-                if (isFollowUp) {
-                    dismissGracefully()
-                } else {
-                    overlayView.updateState(JarvisState.IDLE, "Tap orb to retry", errMsg, "")
-                    scope.launch {
-                        delay(1_800L)
-                        if (!dismissed && !container.voiceEngine.isListening.value && commandJob?.isActive != true) {
-                            dismissGracefully()
-                        }
-                    }
-                }
-            }
-        )
+    override fun onDirectiveReplyReady(reply: String, shouldExitImmediately: Boolean) {
+        if (!visible) return
+        overlayView.updateState(JarvisState.SPEAKING, "Jarvis", reply, "")
+        speakAndMaybeDismiss(reply, forceDismiss = shouldExitImmediately)
     }
 
-    private fun executeSpokenDirective(spoken: String) {
-        commandJob?.cancel()
-        overlayView.updateState(JarvisState.THINKING, "Thinking", spoken, "")
-        container.repository.addMessage(ChatMessage(role = MessageRole.USER, content = spoken))
-
-        commandJob = scope.launch {
-            val history = container.repository.messages.value.dropLast(1)
-            val outcome = container.orchestrator.processUserInput(spoken, history)
-            if (dismissed) return@launch
-
-            setPassThrough(false)
-            container.repository.addMessage(
-                ChatMessage(
-                    role = MessageRole.ASSISTANT,
-                    content = outcome.reply,
-                    traces = outcome.traces
-                )
-            )
-
-            val shouldExitImmediately = outcome.traces.any { it.toolName in exitAfterTools && it.success }
-            if (outcome.aborted) {
-                container.soundEffects.play(StarkCue.ABORT)
-                dismissGracefully()
-                return@launch
-            }
-
-            container.soundEffects.play(StarkCue.DONE)
-            overlayView.updateState(JarvisState.SPEAKING, "Jarvis", outcome.reply, "")
-            speakAndMaybeDismiss(outcome.reply, forceDismiss = shouldExitImmediately)
-        }
+    override fun onDirectiveAborted() {
+        if (!visible) return
+        dismissOverlayGracefully()
     }
 
-    private fun handleVoiceConfirmationPrompt(pending: PendingConfirmation) {
+    override fun onVoiceConfirmationPrompt(pending: PendingConfirmation) {
+        if (!visible) return
         awaitingVoiceConfirm = true
-        setPassThrough(false)
         triggerWakeHaptic()
 
         val settings = container.settingsStore.current()
@@ -266,9 +152,9 @@ class JarvisAssistController(
         val promptSpeech = "Authorization required, ${settings.userTitle}. ${pending.detail}. Say confirm or cancel."
         container.voiceEngine.speak(
             text = promptSpeech,
-            options = buildSpeechOptions(settings),
+            options = container.taskCoordinator.buildSpeechOptions(settings),
             onFinished = {
-                if (dismissed || container.orchestrator.pendingConfirmation.value == null) return@speak
+                if (!visible || container.orchestrator.pendingConfirmation.value == null) return@speak
                 container.soundEffects.play(StarkCue.WAKE)
                 container.voiceEngine.startListening(
                     onFinalResult = { spoken ->
@@ -285,19 +171,99 @@ class JarvisAssistController(
         )
     }
 
+    private fun bindReactiveFlows() {
+        scope.launch {
+            container.voiceEngine.rmsLevel.collectLatest { rms ->
+                if (visible) overlayView.setVoiceRms(rms)
+            }
+        }
+        scope.launch {
+            container.voiceEngine.partialTranscript.collectLatest { partial ->
+                if (visible && partial.isNotBlank() && container.voiceEngine.isListening.value) {
+                    val sub = if (awaitingVoiceConfirm) "Say confirm or cancel" else ""
+                    overlayView.updateState(
+                        if (awaitingVoiceConfirm) JarvisState.AWAITING_AUTH else JarvisState.LISTENING,
+                        if (awaitingVoiceConfirm) "Confirmation" else "Listening",
+                        partial,
+                        sub
+                    )
+                }
+            }
+        }
+        scope.launch {
+            container.orchestrator.state.collectLatest { st ->
+                if (!visible) return@collectLatest
+                val detail = container.orchestrator.statusDetail.value
+                when (st) {
+                    JarvisState.THINKING -> {
+                        overlayView.updateState(JarvisState.THINKING, "Thinking", "", "")
+                    }
+
+                    JarvisState.EXECUTING -> {
+                        val cleanAction = detail.substringAfter("•").trim().replace('_', ' ')
+                            .replaceFirstChar { it.uppercase() }.ifBlank { "Working" }
+                        overlayView.updateState(JarvisState.EXECUTING, "Working", "", cleanAction)
+                    }
+
+                    else -> Unit
+                }
+            }
+        }
+    }
+
+    private fun beginVoiceListening(isFollowUp: Boolean) {
+        if (!visible) return
+        isFollowUpTurn = isFollowUp
+        awaitingVoiceConfirm = false
+
+        val title = container.settingsStore.current().userTitle
+        overlayView.updateState(
+            JarvisState.LISTENING,
+            "Listening",
+            if (isFollowUp) "Anything else, $title?" else "",
+            ""
+        )
+
+        container.voiceEngine.startListening(
+            onFinalResult = { spoken ->
+                if (!visible) return@startListening
+                if (VoiceCommandClassifier.isDismissCommand(spoken)) {
+                    dismissAndAbort()
+                } else {
+                    overlayView.updateState(JarvisState.THINKING, "Thinking", spoken, "")
+                    container.taskCoordinator.submitSpokenDirective(spoken)
+                }
+            },
+            onError = { errMsg ->
+                if (!visible) return@startListening
+                if (isFollowUp) {
+                    dismissOverlayGracefully()
+                } else {
+                    overlayView.updateState(JarvisState.IDLE, "Tap orb to retry", errMsg, "")
+                    scope.launch {
+                        delay(1_800L)
+                        if (visible && !container.voiceEngine.isListening.value && !container.taskCoordinator.isTaskActive()) {
+                            dismissOverlayGracefully()
+                        }
+                    }
+                }
+            }
+        )
+    }
+
     private fun speakAndMaybeDismiss(text: String, forceDismiss: Boolean) {
         val settings = container.settingsStore.current()
         val afterSpeak = {
-            if (!dismissed) {
+            if (visible) {
                 scope.launch {
                     if (!forceDismiss && settings.continuousConversation) {
                         delay(280L)
-                        if (!dismissed) beginVoiceListening(isFollowUp = true)
+                        if (visible) beginVoiceListening(isFollowUp = true)
                     } else if (forceDismiss || settings.autoDismissAfterReply) {
-                        delay(520L)
-                        if (!dismissed) dismissGracefully()
+                        delay(450L)
+                        if (visible) dismissOverlayGracefully()
                     } else {
-                        overlayView.updateState(JarvisState.IDLE, "STANDBY", text, "TAP CORE TO SPEAK")
+                        overlayView.updateState(JarvisState.IDLE, "Standby", text, "Tap orb to speak")
                     }
                 }
             }
@@ -306,31 +272,29 @@ class JarvisAssistController(
         if (settings.ttsEnabled) {
             container.voiceEngine.speak(
                 text = text,
-                options = buildSpeechOptions(settings),
+                options = container.taskCoordinator.buildSpeechOptions(settings),
                 onFinished = afterSpeak
             )
         } else {
             scope.launch {
-                delay(1_800L)
+                delay(1_600L)
                 afterSpeak()
             }
         }
     }
 
     private fun handleCoreTap() {
-        if (dismissed) return
+        if (!visible) return
         triggerWakeHaptic()
         if (awaitingVoiceConfirm) {
-            // Tapping core while awaiting voice auth cancels safely
             awaitingVoiceConfirm = false
             container.voiceEngine.stopListening()
             container.voiceEngine.stopSpeaking()
             container.orchestrator.resolveConfirmation(false)
             return
         }
-        if (commandJob?.isActive == true) {
-            container.orchestrator.abortCurrentTask()
-            commandJob?.cancel()
+        if (container.taskCoordinator.isTaskActive()) {
+            container.taskCoordinator.abortActiveTask()
             container.soundEffects.play(StarkCue.ABORT)
             beginVoiceListening(isFollowUp = false)
             return
@@ -342,44 +306,28 @@ class JarvisAssistController(
         }
         if (container.voiceEngine.isListening.value) {
             container.voiceEngine.stopListening()
-            dismissGracefully()
+            dismissOverlayGracefully()
         } else {
             beginVoiceListening(isFollowUp = false)
         }
     }
 
-    fun dismissGracefully() {
-        if (dismissed) return
-        dismissed = true
-        setPassThrough(false)
-        commandJob?.cancel()
-        container.orchestrator.abortCurrentTask()
+    fun dismissAndAbort() {
+        container.taskCoordinator.abortActiveTask()
         container.voiceEngine.stopListening()
         container.voiceEngine.stopSpeaking()
+        dismissOverlayGracefully()
+    }
+
+    private fun dismissOverlayGracefully() {
+        if (!visible) return
+        visible = false
+        container.taskCoordinator.detachOverlay(this)
         container.soundEffects.play(StarkCue.ABORT)
         overlayView.playDismissAnimation {
             scope.cancel()
             onDismissComplete()
         }
-    }
-
-    private fun setPassThrough(active: Boolean) {
-        overlayView.setPilotPassThrough(active)
-        onPilotPassThroughChanged(active)
-    }
-
-    private fun buildSpeechOptions(s: JarvisSettings): JarvisSpeechOptions = JarvisSpeechOptions(
-        geminiApiKey = s.geminiApiKey,
-        neuralVoiceEnabled = s.neuralJarvisVoice,
-        neuralVoiceName = s.voiceProfile.geminiVoiceName,
-        intercomDspEnabled = s.intercomDspEnabled,
-        speechRate = s.ttsSpeechRate,
-        pitch = s.ttsPitch
-    )
-
-    private fun formatFriendlyStatus(rawDetail: String): String {
-        val clean = rawDetail.substringAfter("•").trim().replace('_', ' ')
-        return clean.replaceFirstChar { it.uppercase() }.ifBlank { "Working" }
     }
 
     private fun triggerWakeHaptic() {
@@ -391,7 +339,7 @@ class JarvisAssistController(
                 @Suppress("DEPRECATION")
                 context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
             }
-            vibrator?.vibrate(VibrationEffect.createOneShot(26L, VibrationEffect.DEFAULT_AMPLITUDE))
+            vibrator?.vibrate(VibrationEffect.createOneShot(24L, VibrationEffect.DEFAULT_AMPLITUDE))
         }
     }
 }
