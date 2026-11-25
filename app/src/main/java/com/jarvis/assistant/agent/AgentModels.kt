@@ -147,7 +147,8 @@ enum class MessageRole {
 data class ToolCall(
     val id: String,
     val name: String,
-    val arguments: JSONObject
+    val arguments: JSONObject,
+    val thoughtSignature: String? = null
 )
 
 data class ToolResult(

@@ -1,12 +1,14 @@
 package com.jarvis.assistant.agent
 
 import com.jarvis.assistant.tools.ToolSpec
+import org.json.JSONArray
 
 sealed class LlmMessage {
     data class User(val content: String) : LlmMessage()
     data class Assistant(
         val content: String,
-        val toolCalls: List<ToolCall> = emptyList()
+        val toolCalls: List<ToolCall> = emptyList(),
+        val rawGeminiParts: JSONArray? = null
     ) : LlmMessage()
 
     data class ToolOutput(
@@ -18,7 +20,8 @@ sealed class LlmMessage {
 
 data class LlmResponse(
     val text: String,
-    val toolCalls: List<ToolCall> = emptyList()
+    val toolCalls: List<ToolCall> = emptyList(),
+    val rawGeminiParts: JSONArray? = null
 )
 
 interface LlmClient {

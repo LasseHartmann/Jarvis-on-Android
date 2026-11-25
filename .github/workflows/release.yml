@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag name (e.g. v1.0.0)'
+        description: 'Release tag name (e.g. v1.0.1)'
         required: true
-        default: 'v1.0.0'
+        default: 'v1.0.1'
 
 permissions:
   contents: write
@@ -20,10 +20,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up JDK 25
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '25'
@@ -37,7 +37,7 @@ jobs:
           "$SDKMGR" --sdk_root="$SDK_ROOT" --install "platforms;android-37.1" "build-tools;37.0.0" "platform-tools"
 
       - name: Set up Gradle caching
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Ensure Gradle wrapper is executable
         run: chmod +x gradlew
@@ -92,24 +92,38 @@ jobs:
           ls -lh release-dist
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.meta.outputs.tag }}
-          name: Jarvis ${{ steps.meta.outputs.tag }}
-          make_latest: true
-          body: |
-            ## Jarvis on Android ${{ steps.meta.outputs.tag }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          SIGNED_MODE: ${{ steps.signing.outputs.signed_mode }}
+        run: |
+          cat <<EOF > release-notes.md
+          ## Jarvis on Android ${TAG}
 
-            ### Quick Install on Android
-            - **Direct on phone**: Tap **`Jarvis.apk`** below to download and install directly. *(On Android 15 / Xiaomi HyperOS, unlock Restricted Settings via Settings → Apps → Manage apps → J.A.R.V.I.S. → `⋮` → Allow restricted settings before enabling Accessibility.)*
-            - **Zero-clone PC ADB install (best for Xiaomi 15T Pro)**:
-              ```powershell
-              irm https://raw.githubusercontent.com/LasseHartmann/Jarvis-on-Android/main/scripts/install_from_github.ps1 | iex
-              ```
-            - **Auto-updates via Obtainium**: Add `https://github.com/LasseHartmann/Jarvis-on-Android` in Obtainium.
+          ### Quick Install on Android
+          - **Direct on phone**: Tap **\`Jarvis.apk\`** below to download and install directly. *(On Android 15 / Xiaomi HyperOS, unlock Restricted Settings via Settings → Apps → Manage apps → J.A.R.V.I.S. → \`⋮\` → Allow restricted settings before enabling Accessibility.)*
+          - **Zero-clone PC ADB install (best for Xiaomi 15T Pro)**:
+            \`\`\`powershell
+            irm https://raw.githubusercontent.com/LasseHartmann/Jarvis-on-Android/main/scripts/install_from_github.ps1 | iex
+            \`\`\`
+          - **Auto-updates via Obtainium**: Add \`https://github.com/LasseHartmann/Jarvis-on-Android\` in Obtainium.
 
-            **Signing**: ${{ steps.signing.outputs.signed_mode }}
-          files: |
-            release-dist/Jarvis.apk
-            release-dist/Jarvis-${{ steps.meta.outputs.tag }}.apk
-            release-dist/SHA256SUMS.txt
+          **Signing**: ${SIGNED_MODE}
+          EOF
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              release-dist/Jarvis.apk \
+              "release-dist/Jarvis-${TAG}.apk" \
+              release-dist/SHA256SUMS.txt \
+              --clobber
+            gh release edit "$TAG" --notes-file release-notes.md --latest
+          else
+            gh release create "$TAG" \
+              release-dist/Jarvis.apk \
+              "release-dist/Jarvis-${TAG}.apk" \
+              release-dist/SHA256SUMS.txt \
+              --title "Jarvis ${TAG}" \
+              --notes-file release-notes.md \
+              --latest
+          fi

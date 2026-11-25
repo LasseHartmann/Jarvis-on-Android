@@ -61,19 +61,27 @@ class GeminiLlmClient(
                 }
 
                 is LlmMessage.Assistant -> {
-                    val parts = JSONArray()
-                    if (msg.content.isNotBlank()) {
-                        parts.put(JSONObject().put("text", msg.content))
-                    }
-                    for (tc in msg.toolCalls) {
-                        parts.put(
-                            JSONObject().put(
-                                "functionCall",
-                                JSONObject()
-                                    .put("name", tc.name)
-                                    .put("args", tc.arguments)
-                            )
-                        )
+                    val parts = if (msg.rawGeminiParts != null && msg.rawGeminiParts.length() > 0) {
+                        // Preserve exact raw model parts (including thoughtSignature & thought blocks)
+                        JSONArray(msg.rawGeminiParts.toString())
+                    } else {
+                        JSONArray().apply {
+                            if (msg.content.isNotBlank()) {
+                                put(JSONObject().put("text", msg.content))
+                            }
+                            for (tc in msg.toolCalls) {
+                                val callPart = JSONObject().put(
+                                    "functionCall",
+                                    JSONObject()
+                                        .put("name", tc.name)
+                                        .put("args", tc.arguments)
+                                )
+                                if (!tc.thoughtSignature.isNullOrBlank()) {
+                                    callPart.put("thoughtSignature", tc.thoughtSignature)
+                                }
+                                put(callPart)
+                            }
+                        }
                     }
                     if (parts.length() > 0) {
                         contents.put(JSONObject().put("role", "model").put("parts", parts))
@@ -156,25 +164,37 @@ class GeminiLlmClient(
 
         for (i in 0 until parts.length()) {
             val part = parts.getJSONObject(i)
+            val isInternalThought = part.optBoolean("thought", false)
             val txt = part.optString("text", "")
-            if (txt.isNotBlank()) textParts.add(txt)
+            if (txt.isNotBlank() && !isInternalThought) {
+                textParts.add(txt)
+            }
 
             val fnCall = part.optJSONObject("functionCall")
             if (fnCall != null) {
                 val name = fnCall.optString("name", "")
                 val args = fnCall.optJSONObject("args") ?: JSONObject()
+                val sig = part.optString("thoughtSignature", "")
+                    .ifBlank { part.optString("thought_signature", "") }
+                    .ifBlank { null }
                 if (name.isNotBlank()) {
                     toolCalls.add(
                         ToolCall(
                             id = "gem_${UUID.randomUUID().toString().take(8)}",
                             name = name,
-                            arguments = args
+                            arguments = args,
+                            thoughtSignature = sig
                         )
                     )
                 }
             }
         }
-        return LlmResponse(text = textParts.joinToString("\n").trim(), toolCalls = toolCalls)
+        val rawCopy = if (parts.length() > 0) JSONArray(parts.toString()) else null
+        return LlmResponse(
+            text = textParts.joinToString("\n").trim(),
+            toolCalls = toolCalls,
+            rawGeminiParts = rawCopy
+        )
     }
 
     private fun toGeminiSchema(schema: JSONObject): JSONObject {

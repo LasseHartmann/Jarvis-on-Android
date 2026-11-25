@@ -148,7 +148,7 @@ class JarvisOrchestrator(
                     return OrchestratorOutcome(reply = finalReply, traces = traces)
                 }
 
-                messages.add(LlmMessage.Assistant(response.text, response.toolCalls))
+                messages.add(LlmMessage.Assistant(response.text, response.toolCalls, response.rawGeminiParts))
 
                 for (call in response.toolCalls) {
                     if (abortFlag.get()) {

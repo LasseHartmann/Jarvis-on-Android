@@ -48,17 +48,34 @@ class LlmPayloadParsingTest {
             {
               "candidates": [{
                 "content": {
+                  "role": "model",
                   "parts": [
-                    { "functionCall": { "name": "set_volume", "args": { "stream": "media", "percent": 75 } } }
+                    { "thought": true, "text": "Internal reasoning step..." },
+                    { "thoughtSignature": "SIG_XYZ_999", "functionCall": { "name": "set_volume", "args": { "stream": "media", "percent": 75 } } }
                   ]
                 }
               }]
             }
         """.trimIndent()
         val parsed = client.parseResponseBody(mockResponse)
+        assertEquals("", parsed.text)
         assertEquals(1, parsed.toolCalls.size)
         assertEquals("set_volume", parsed.toolCalls[0].name)
         assertEquals(75, parsed.toolCalls[0].arguments.getInt("percent"))
+        assertEquals("SIG_XYZ_999", parsed.toolCalls[0].thoughtSignature)
+
+        // Verify next turn echoes back thoughtSignature verbatim in model parts
+        val followUpBody = client.buildRequestBody(
+            systemPrompt = "You are JARVIS",
+            messages = listOf(
+                LlmMessage.User("Turn it up"),
+                LlmMessage.Assistant(parsed.text, parsed.toolCalls, parsed.rawGeminiParts),
+                LlmMessage.ToolOutput(parsed.toolCalls[0].id, "set_volume", "Volume set to 75%")
+            ),
+            tools = sampleTools
+        )
+        val modelTurnParts = followUpBody.getJSONArray("contents").getJSONObject(1).getJSONArray("parts")
+        assertEquals("SIG_XYZ_999", modelTurnParts.getJSONObject(1).getString("thoughtSignature"))
     }
 
     @Test
