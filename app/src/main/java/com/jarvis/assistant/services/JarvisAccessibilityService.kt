@@ -12,6 +12,7 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import com.jarvis.assistant.JarvisApplication
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
@@ -23,6 +24,9 @@ class JarvisAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        runCatching {
+            (applicationContext as? JarvisApplication)?.container?.ambientIndicator?.attachHost(this)
+        }
         Log.i(TAG, "JarvisAccessibilityService connected (canPerformGestures=true)")
     }
 
@@ -38,6 +42,9 @@ class JarvisAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        runCatching {
+            (applicationContext as? JarvisApplication)?.container?.ambientIndicator?.detachHost(this)
+        }
         if (instance === this) {
             instance = null
         }

@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.jarvis.assistant.JarvisApplication
+import com.jarvis.assistant.agent.JarvisState
+import com.jarvis.assistant.assist.AmbientPillSnapshot
 import com.jarvis.assistant.services.JarvisAccessibilityService
 import com.jarvis.assistant.services.ScreenTreeSerializer
 import kotlinx.coroutines.CoroutineScope
@@ -68,6 +70,23 @@ class DebugPilotReceiver : BroadcastReceiver() {
                         } else {
                             Log.i(TAG, "RESULT_DISMISS_READ: pkg=${snap.packageName} nodes=${snap.nodes.size}\n${ScreenTreeSerializer.formatForLlm(snap, maxNodes = 15)}")
                         }
+                    }
+
+                    "preview_pill" -> {
+                        val app = context.applicationContext as? JarvisApplication
+                        val indicator = app?.container?.ambientIndicator
+                        val mode = intent.getStringExtra("state").orEmpty().lowercase()
+                        val customLabel = intent.getStringExtra("label")
+                        val snap = when (mode) {
+                            "listening" -> AmbientPillSnapshot(true, JarvisState.LISTENING, customLabel ?: "Listening")
+                            "thinking" -> AmbientPillSnapshot(true, JarvisState.THINKING, customLabel ?: "Thinking")
+                            "executing" -> AmbientPillSnapshot(true, JarvisState.EXECUTING, customLabel ?: "Opening WhatsApp")
+                            "speaking" -> AmbientPillSnapshot(true, JarvisState.SPEAKING, customLabel ?: "Jarvis")
+                            "auth" -> AmbientPillSnapshot(true, JarvisState.AWAITING_AUTH, customLabel ?: "Confirm?")
+                            else -> null
+                        }
+                        indicator?.setPreviewOverride(snap)
+                        Log.i(TAG, "RESULT_PREVIEW_PILL: mode=$mode snap=$snap")
                     }
 
                     else -> Log.w(TAG, "RESULT: unknown action=$action")

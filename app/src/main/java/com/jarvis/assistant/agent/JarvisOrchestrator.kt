@@ -155,7 +155,7 @@ class JarvisOrchestrator(
                         transition(JarvisState.IDLE, "Aborted")
                         return OrchestratorOutcome("Operation halted, ${settings.userTitle}.", traces, aborted = true)
                     }
-                    transition(JarvisState.EXECUTING, "Step $step • ${call.name}")
+                    transition(JarvisState.EXECUTING, formatExecutingDetail(step, call))
                     val (result, trace) = runGuardedToolCall(call, settings)
                     traces.add(trace)
                     _liveTraces.value = traces.toList()
@@ -260,6 +260,28 @@ class JarvisOrchestrator(
                 p.name.equals(normalized, ignoreCase = true)
         }
         return if (matched != null && settings.hasActiveCloudKey()) matched.commandPrompt else rawInput
+    }
+
+    private fun formatExecutingDetail(step: Int, call: ToolCall): String {
+        val hint = when (call.name) {
+            "open_app" -> call.arguments.optString("app_name", "").trim()
+                .replaceFirstChar { it.uppercase() }
+                .take(14)
+                .takeIf { it.isNotBlank() }
+                ?.let { "Opening $it" }
+
+            "tap_element" -> call.arguments.optString("query", "").trim()
+                .take(12)
+                .takeIf { it.isNotBlank() }
+                ?.let { "Tapping $it" }
+
+            "scroll_screen" -> call.arguments.optString("direction", "").trim().lowercase()
+                .takeIf { it in setOf("up", "down", "left", "right") }
+                ?.let { "Scrolling $it" }
+
+            else -> null
+        }
+        return if (hint != null) "Step $step • $hint" else "Step $step • ${call.name}"
     }
 
     private fun transition(newState: JarvisState, detail: String) {

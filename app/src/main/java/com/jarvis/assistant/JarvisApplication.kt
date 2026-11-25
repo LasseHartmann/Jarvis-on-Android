@@ -9,6 +9,7 @@ import com.jarvis.assistant.agent.JarvisSettings
 import com.jarvis.assistant.agent.JarvisState
 import com.jarvis.assistant.agent.LlmClient
 import com.jarvis.assistant.agent.OpenAiCompatibleLlmClient
+import com.jarvis.assistant.assist.JarvisAmbientIndicator
 import com.jarvis.assistant.assist.JarvisTaskCoordinator
 import com.jarvis.assistant.data.JarvisDatabaseHelper
 import com.jarvis.assistant.data.JarvisRepository
@@ -31,6 +32,9 @@ class JarvisAppContainer(context: Context) {
     val voiceEngine = JarvisVoiceEngine(appContext)
 
     lateinit var taskCoordinator: JarvisTaskCoordinator
+        private set
+
+    lateinit var ambientIndicator: JarvisAmbientIndicator
         private set
 
     val toolRegistry = ToolRegistry(
@@ -67,6 +71,12 @@ class JarvisAppContainer(context: Context) {
             settingsStore = settingsStore,
             voiceEngine = voiceEngine,
             soundEffects = soundEffects
+        )
+        ambientIndicator = JarvisAmbientIndicator(
+            orchestrator = orchestrator,
+            voiceEngine = voiceEngine,
+            settingsStore = settingsStore,
+            taskCoordinator = taskCoordinator
         )
     }
 

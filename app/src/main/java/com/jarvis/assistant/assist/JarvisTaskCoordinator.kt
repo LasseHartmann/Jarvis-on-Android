@@ -18,6 +18,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -51,6 +54,12 @@ class JarvisTaskCoordinator(
     @Volatile
     private var activeTaskJob: Job? = null
 
+    private val _overlayVisible = MutableStateFlow(false)
+    val overlayVisible: StateFlow<Boolean> = _overlayVisible.asStateFlow()
+
+    private val _headlessSpeechActive = MutableStateFlow(false)
+    val headlessSpeechActive: StateFlow<Boolean> = _headlessSpeechActive.asStateFlow()
+
     private val exitAfterTools = setOf(
         "open_app", "open_url", "web_search", "open_system_panel",
         "make_call", "global_action", "tap_element", "tap_coordinates", "type_text", "scroll_screen"
@@ -68,11 +77,14 @@ class JarvisTaskCoordinator(
 
     fun attachOverlay(handle: OverlaySessionHandle) {
         activeOverlay = handle
+        _overlayVisible.value = true
+        _headlessSpeechActive.value = false
     }
 
     fun detachOverlay(handle: OverlaySessionHandle) {
         if (activeOverlay === handle) {
             activeOverlay = null
+            _overlayVisible.value = false
         }
     }
 
@@ -85,7 +97,10 @@ class JarvisTaskCoordinator(
      */
     suspend fun dismissOverlayForScreenPilot() {
         val handle = activeOverlay ?: return
-        if (!handle.isOverlayVisible()) return
+        if (!handle.isOverlayVisible()) {
+            _overlayVisible.value = false
+            return
+        }
         Log.i(TAG, "Dismissing Jarvis overlay cleanly so underlying app is unobstructed for Accessibility pilot")
         withContext(Dispatchers.Main.immediate) {
             handle.dismissForScreenPilot()
@@ -94,6 +109,7 @@ class JarvisTaskCoordinator(
         if (activeOverlay === handle) {
             activeOverlay = null
         }
+        _overlayVisible.value = false
         delay(340L)
     }
 
@@ -129,9 +145,11 @@ class JarvisTaskCoordinator(
                 // Overlay already hid for screen piloting — speak the final J.A.R.V.I.S. confirmation cleanly over the target app!
                 val settings = settingsStore.current()
                 if (settings.ttsEnabled) {
+                    _headlessSpeechActive.value = true
                     voiceEngine.speak(
                         text = outcome.reply,
-                        options = buildSpeechOptions(settings)
+                        options = buildSpeechOptions(settings),
+                        onFinished = { _headlessSpeechActive.value = false }
                     )
                 }
             }
@@ -139,6 +157,7 @@ class JarvisTaskCoordinator(
     }
 
     fun abortActiveTask() {
+        _headlessSpeechActive.value = false
         orchestrator.abortCurrentTask()
         activeTaskJob?.cancel()
         activeTaskJob = null

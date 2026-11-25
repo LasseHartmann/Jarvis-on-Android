@@ -365,6 +365,7 @@ class StarkAssistOverlayView(context: Context) : View(context), Choreographer.Fr
         alpha: Float
     ) {
         val rotSpeed = when (state) {
+            JarvisState.EXECUTING -> 1.85f
             JarvisState.THINKING -> 1.45f
             JarvisState.SPEAKING -> 0.85f
             JarvisState.AWAITING_AUTH -> 0.55f
@@ -378,11 +379,15 @@ class StarkAssistOverlayView(context: Context) : View(context), Choreographer.Fr
         val sinX = sin(rotX)
 
         val breath = when (state) {
-            JarvisState.LISTENING -> 1f + smoothRms * 0.22f + sin(elapsedSec * 3.2f) * 0.03f
+            JarvisState.LISTENING -> 1f + smoothRms * 0.22f + sin(elapsedSec * 3.2f) * 0.035f
             JarvisState.SPEAKING -> 1f + 0.08f * sin(elapsedSec * 11f) * sin(elapsedSec * 4.1f)
-            JarvisState.THINKING -> 0.90f + 0.05f * sin(elapsedSec * 5.2f)
+            JarvisState.THINKING -> 0.90f + 0.055f * sin(elapsedSec * 5.2f)
+            JarvisState.EXECUTING -> 0.94f + 0.06f * sin(elapsedSec * 7.8f)
             else -> 0.96f + 0.03f * sin(elapsedSec * 2.2f)
         }
+
+        // Passive ambient state halo around the 3D sphere (Listening waves / Thinking orbit / Executing arcs)
+        drawPassiveStateHalo(canvas, cx, cy, baseR * breath, primary, highlight, alpha)
 
         // Soft internal core luminosity (no hard circle edge)
         val innerAuraR = baseR * (1.28f * breath)
@@ -462,6 +467,62 @@ class StarkAssistOverlayView(context: Context) : View(context), Choreographer.Fr
         )
         canvas.drawCircle(cx, cy, heartR * 2.4f, fillPaint)
         fillPaint.shader = null
+    }
+
+    private fun drawPassiveStateHalo(
+        canvas: Canvas,
+        cx: Float,
+        cy: Float,
+        radius: Float,
+        primary: Int,
+        highlight: Int,
+        alpha: Float
+    ) {
+        when (state) {
+            JarvisState.LISTENING, JarvisState.AWAITING_AUTH -> {
+                // Two soft concentric passive acoustic ripples expanding gently from the orb
+                linePaint.strokeWidth = 1.15f * density
+                for (i in 0..1) {
+                    val phase = (elapsedSec * 0.62f + i * 0.5f) % 1f
+                    val r = radius * (1.06f + phase * (0.42f + smoothRms * 0.18f))
+                    val ringAlpha = ((1f - phase) * (62f + smoothRms * 75f) * alpha).toInt().coerceIn(0, 150)
+                    linePaint.color = withAlpha(primary, ringAlpha)
+                    canvas.drawCircle(cx, cy, r, linePaint)
+                }
+            }
+
+            JarvisState.THINKING -> {
+                // Delicate orbital synapse track + twin luminous sparks sweeping smoothly around the sphere
+                val orbitR = radius * 1.24f
+                linePaint.strokeWidth = 0.9f * density
+                linePaint.color = withAlpha(primary, (36 * alpha).toInt())
+                canvas.drawCircle(cx, cy, orbitR, linePaint)
+
+                for (i in 0..1) {
+                    val ang = elapsedSec * 2.35f + i * PI.toFloat()
+                    val sx = cx + cos(ang) * orbitR
+                    val sy = cy + sin(ang) * orbitR
+                    fillPaint.color = withAlpha(primary, (72 * alpha).toInt())
+                    canvas.drawCircle(sx, sy, 5.2f * density, fillPaint)
+                    fillPaint.color = withAlpha(highlight, (225 * alpha).toInt())
+                    canvas.drawCircle(sx, sy, 2.0f * density, fillPaint)
+                }
+            }
+
+            JarvisState.EXECUTING -> {
+                // Twin high-precision kinetic arcs rotating crisply around the core while executing actions
+                val arcR = radius * 1.22f
+                pillRect.set(cx - arcR, cy - arcR, cx + arcR, cy + arcR)
+                val deg = (elapsedSec * 210f) % 360f
+                linePaint.strokeWidth = 1.6f * density
+                linePaint.color = withAlpha(highlight, (185 * alpha).toInt())
+                canvas.drawArc(pillRect, deg, 58f, false, linePaint)
+                linePaint.color = withAlpha(primary, (115 * alpha).toInt())
+                canvas.drawArc(pillRect, deg + 180f, 58f, false, linePaint)
+            }
+
+            else -> Unit
+        }
     }
 
     private fun drawFloatingTypography(
