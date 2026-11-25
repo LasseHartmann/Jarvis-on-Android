@@ -71,4 +71,13 @@ class SafetyGuardTest {
         val assess = SafetyGuard.assess(call, tapSpec, SafetyMode.STRICT, "com.spotify.music", emptyList())
         assertTrue(assess.requiresConfirmation)
     }
+
+    @Test
+    fun autonomousIsDefaultAndAutoRunsStandardSendTaps() {
+        assertEquals(SafetyMode.AUTONOMOUS, com.jarvis.assistant.agent.JarvisSettings().safetyMode)
+        val sendTap = ToolCall("6", "tap_element", JSONObject().put("query", "Send"))
+        val assess = SafetyGuard.assess(sendTap, tapSpec, SafetyMode.AUTONOMOUS, "com.whatsapp", emptyList())
+        assertEquals(RiskLevel.SENSITIVE, assess.riskLevel)
+        assertFalse(assess.requiresConfirmation)
+    }
 }

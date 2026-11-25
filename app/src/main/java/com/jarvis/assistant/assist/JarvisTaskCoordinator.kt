@@ -169,12 +169,12 @@ class JarvisTaskCoordinator(
             overlay.onVoiceConfirmationPrompt(pending)
             return
         }
-        // Headless voice-only confirmation while piloting an app underneath!
+        // Headless voice-only confirmation while piloting an app underneath — instant on-device voice for zero cloud pause
         val settings = settingsStore.current()
-        val prompt = "Authorization required, ${settings.userTitle}. ${pending.detail}. Say confirm or cancel."
+        val prompt = buildConfirmationPrompt(pending, settings.userTitle)
         voiceEngine.speak(
             text = prompt,
-            options = buildSpeechOptions(settings),
+            options = buildSpeechOptions(settings, instantLocal = true),
             onFinished = {
                 if (orchestrator.pendingConfirmation.value == null) return@speak
                 soundEffects.play(StarkCue.WAKE)
@@ -191,16 +191,45 @@ class JarvisTaskCoordinator(
         )
     }
 
-    fun buildSpeechOptions(s: JarvisSettings): JarvisSpeechOptions = JarvisSpeechOptions(
+    fun buildConfirmationPrompt(pending: PendingConfirmation, userTitle: String): String =
+        formatConfirmationPrompt(pending.detail, userTitle)
+
+    fun buildSpeechOptions(s: JarvisSettings, instantLocal: Boolean = false): JarvisSpeechOptions = JarvisSpeechOptions(
         geminiApiKey = s.geminiApiKey,
         neuralVoiceEnabled = s.neuralJarvisVoice,
         neuralVoiceName = s.voiceProfile.geminiVoiceName,
         intercomDspEnabled = s.intercomDspEnabled,
         speechRate = s.ttsSpeechRate,
-        pitch = s.ttsPitch
+        pitch = s.ttsPitch,
+        preferInstantLocal = instantLocal
     )
 
     companion object {
         private const val TAG = "JarvisCoordinator"
+
+        fun formatConfirmationPrompt(rawDetail: String, userTitle: String): String {
+            val detail = rawDetail.trim()
+            val phrase = when {
+                detail.startsWith("Tap '") && detail.endsWith("'") ->
+                    "tapping ${detail.removePrefix("Tap '").removeSuffix("'")}"
+                detail.startsWith("Tap ") ->
+                    "tapping ${detail.removePrefix("Tap ")}"
+                detail.startsWith("Dial ") ->
+                    "calling ${detail.removePrefix("Dial ")}"
+                detail.startsWith("To ") ->
+                    "sending that message"
+                detail.startsWith("Reply:") ->
+                    "sending that reply"
+                detail.startsWith("Enable ") ->
+                    "enabling ${detail.removePrefix("Enable ")}"
+                detail.startsWith("Disable ") ->
+                    "disabling ${detail.removePrefix("Disable ")}"
+                detail.isNotBlank() ->
+                    detail.replaceFirstChar { it.lowercase() }
+                else ->
+                    "this action"
+            }
+            return "Confirm $phrase, $userTitle?"
+        }
     }
 }

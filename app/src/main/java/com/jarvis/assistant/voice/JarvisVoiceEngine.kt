@@ -41,7 +41,8 @@ data class JarvisSpeechOptions(
     val neuralVoiceName: String = "Charon",
     val intercomDspEnabled: Boolean = true,
     val speechRate: Float = 1.03f,
-    val pitch: Float = 0.88f
+    val pitch: Float = 0.88f,
+    val preferInstantLocal: Boolean = false
 )
 
 class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
@@ -99,7 +100,9 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
                         synthesisWaiters.remove(utteranceId)?.complete(true)
                     } else {
                         _isSpeaking.value = false
-                        mainHandler.post { onDirectTtsFinishedCallback?.invoke() }
+                        val cb = onDirectTtsFinishedCallback
+                        onDirectTtsFinishedCallback = null
+                        mainHandler.post { cb?.invoke() }
                     }
                 }
 
@@ -109,7 +112,9 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
                         synthesisWaiters.remove(utteranceId)?.complete(false)
                     } else {
                         _isSpeaking.value = false
-                        mainHandler.post { onDirectTtsFinishedCallback?.invoke() }
+                        val cb = onDirectTtsFinishedCallback
+                        onDirectTtsFinishedCallback = null
+                        mainHandler.post { cb?.invoke() }
                     }
                 }
             })
@@ -174,8 +179,9 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
             _isSpeaking.value = true
             try {
                 // Tier 1: Authentic Neural J.A.R.V.I.S. Voice via Gemini TTS + Stark Helmet Intercom DSP
+                // Skipped when preferInstantLocal=true (e.g. time-sensitive voice confirmation prompts)
                 var pcm: DecodedPcm? = null
-                if (options.neuralVoiceEnabled && options.geminiApiKey.isNotBlank()) {
+                if (!options.preferInstantLocal && options.neuralVoiceEnabled && options.geminiApiKey.isNotBlank()) {
                     pcm = geminiTtsClient.synthesizeJarvisSpeech(
                         apiKey = options.geminiApiKey,
                         text = clean,
@@ -184,7 +190,7 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
                 }
 
                 // Tier 2: Offline British Male Android TTS synthesized into WAV + Stark Helmet Intercom DSP
-                if (pcm == null && ttsReady && options.intercomDspEnabled) {
+                if (!options.preferInstantLocal && pcm == null && ttsReady && options.intercomDspEnabled) {
                     pcm = synthesizeOfflineTtsToPcm(clean, options.speechRate, options.pitch)
                 }
 
@@ -305,6 +311,7 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
     fun stopSpeaking() {
         activeSpeakJob?.cancel()
         activeSpeakJob = null
+        onDirectTtsFinishedCallback = null
         val track = activeAudioTrack
         activeAudioTrack = null
         runCatching {

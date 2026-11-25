@@ -44,8 +44,8 @@ class SecureSettingsStore(context: Context) {
         }.getOrDefault(AiProvider.GEMINI)
 
         val safety = runCatching {
-            SafetyMode.valueOf(prefs.getString(KEY_SAFETY_MODE, SafetyMode.BALANCED.name) ?: SafetyMode.BALANCED.name)
-        }.getOrDefault(SafetyMode.BALANCED)
+            SafetyMode.valueOf(prefs.getString(KEY_SAFETY_MODE, SafetyMode.AUTONOMOUS.name) ?: SafetyMode.AUTONOMOUS.name)
+        }.getOrDefault(SafetyMode.AUTONOMOUS)
 
         val persona = runCatching {
             PersonaStyle.valueOf(prefs.getString(KEY_PERSONA, PersonaStyle.CLASSIC_STARK.name) ?: PersonaStyle.CLASSIC_STARK.name)

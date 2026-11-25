@@ -221,7 +221,7 @@ data class JarvisSettings(
     val openAiApiKey: String = "",
     val openAiBaseUrl: String = AiProvider.OPENAI_COMPATIBLE.defaultBaseUrl,
     val openAiModel: String = AiProvider.OPENAI_COMPATIBLE.defaultModel,
-    val safetyMode: SafetyMode = SafetyMode.BALANCED,
+    val safetyMode: SafetyMode = SafetyMode.AUTONOMOUS,
     val personaStyle: PersonaStyle = PersonaStyle.CLASSIC_STARK,
     val hudColorTheme: HudColorTheme = HudColorTheme.JARVIS_AMBER,
     val userTitle: String = "Sir",

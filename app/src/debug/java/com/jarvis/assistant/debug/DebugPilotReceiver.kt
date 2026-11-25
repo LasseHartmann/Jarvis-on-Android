@@ -6,6 +6,7 @@ import android.content.Intent
 import android.util.Log
 import com.jarvis.assistant.JarvisApplication
 import com.jarvis.assistant.agent.JarvisState
+import com.jarvis.assistant.agent.SafetyMode
 import com.jarvis.assistant.assist.AmbientPillSnapshot
 import com.jarvis.assistant.services.JarvisAccessibilityService
 import com.jarvis.assistant.services.ScreenTreeSerializer
@@ -87,6 +88,18 @@ class DebugPilotReceiver : BroadcastReceiver() {
                         }
                         indicator?.setPreviewOverride(snap)
                         Log.i(TAG, "RESULT_PREVIEW_PILL: mode=$mode snap=$snap")
+                    }
+
+                    "set_safety" -> {
+                        val app = context.applicationContext as? JarvisApplication
+                        val modeStr = intent.getStringExtra("mode").orEmpty().uppercase()
+                        val mode = runCatching { SafetyMode.valueOf(modeStr) }.getOrNull()
+                        if (app != null && mode != null) {
+                            app.container.settingsStore.update { it.copy(safetyMode = mode) }
+                            Log.i(TAG, "RESULT_SET_SAFETY: safetyMode=${app.container.settingsStore.current().safetyMode}")
+                        } else {
+                            Log.w(TAG, "RESULT_SET_SAFETY: invalid mode=$modeStr")
+                        }
                     }
 
                     else -> Log.w(TAG, "RESULT: unknown action=$action")

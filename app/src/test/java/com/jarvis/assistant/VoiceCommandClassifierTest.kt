@@ -27,4 +27,20 @@ class VoiceCommandClassifierTest {
         assertEquals(false, VoiceCommandClassifier.parseConfirmation("Nein abbrechen"))
         assertNull(VoiceCommandClassifier.parseConfirmation("what time is it"))
     }
+
+    @Test
+    fun formatsConciseInstantConfirmationPrompts() {
+        assertEquals(
+            "Confirm tapping Send, Sir?",
+            com.jarvis.assistant.assist.JarvisTaskCoordinator.formatConfirmationPrompt("Tap 'Send'", "Sir")
+        )
+        assertEquals(
+            "Confirm tapping Confirm Payment, Sir?",
+            com.jarvis.assistant.assist.JarvisTaskCoordinator.formatConfirmationPrompt("Tap 'Confirm Payment'", "Sir")
+        )
+        assertEquals(
+            "Confirm calling +491234, Sir?",
+            com.jarvis.assistant.assist.JarvisTaskCoordinator.formatConfirmationPrompt("Dial +491234", "Sir")
+        )
+    }
 }

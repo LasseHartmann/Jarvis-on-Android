@@ -149,10 +149,10 @@ class JarvisAssistController(
             "Say confirm or cancel"
         )
 
-        val promptSpeech = "Authorization required, ${settings.userTitle}. ${pending.detail}. Say confirm or cancel."
+        val promptSpeech = container.taskCoordinator.buildConfirmationPrompt(pending, settings.userTitle)
         container.voiceEngine.speak(
             text = promptSpeech,
-            options = container.taskCoordinator.buildSpeechOptions(settings),
+            options = container.taskCoordinator.buildSpeechOptions(settings, instantLocal = true),
             onFinished = {
                 if (!visible || container.orchestrator.pendingConfirmation.value == null) return@speak
                 container.soundEffects.play(StarkCue.WAKE)
