@@ -36,3 +36,4 @@ google-services.json
 Thumbs.db
 desktop.ini
 hs_err_pid*.log
+replay_pid*.log
