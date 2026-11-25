@@ -28,13 +28,13 @@ jobs:
           distribution: temurin
           java-version: '25'
 
-      - name: Set up Android SDK & install API 37.1
-        uses: android-actions/setup-android@v3
-
-      - name: Install required Android SDK packages
+      - name: Install required Android SDK packages (API 37.1)
         run: |
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager --install "platforms;android-37.1" "build-tools;37.0.0"
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDKMGR="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          echo "Using SDK at $SDK_ROOT"
+          yes | "$SDKMGR" --sdk_root="$SDK_ROOT" --licenses > /dev/null 2>&1 || true
+          "$SDKMGR" --sdk_root="$SDK_ROOT" --install "platforms;android-37.1" "build-tools;37.0.0" "platform-tools"
 
       - name: Set up Gradle caching
         uses: gradle/actions/setup-gradle@v4
