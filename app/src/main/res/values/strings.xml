@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">J.A.R.V.I.S.</string>
+    <string name="accessibility_service_label">J.A.R.V.I.S. Phone Pilot</string>
+    <string name="accessibility_service_description">Allows J.A.R.V.I.S. to read visible UI elements (with passwords automatically redacted), tap controls, enter text, scroll, and execute global system actions on your Xiaomi 15T Pro.</string>
+    <string name="notification_service_label">J.A.R.V.I.S. Notification Core</string>
+    <string name="qs_tile_label">J.A.R.V.I.S.</string>
+</resources>
