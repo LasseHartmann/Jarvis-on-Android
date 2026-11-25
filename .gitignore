@@ -31,7 +31,8 @@ google-services.json
 *.swo
 *~
 
-# OS clutter
+# OS & JVM crash clutter
 .DS_Store
 Thumbs.db
 desktop.ini
+hs_err_pid*.log

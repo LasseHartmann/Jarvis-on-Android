@@ -11,20 +11,40 @@ android {
         }
     }
 
+    val releaseVersionName = (findProperty("jarvisVersionName") as? String)?.trim().orEmpty().ifBlank { "1.0.0" }
+    val releaseVersionCode = (findProperty("jarvisVersionCode") as? String)?.toIntOrNull() ?: 1
+
     defaultConfig {
         applicationId = "com.jarvis.assistant"
         minSdk = 31
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0-stark"
+        versionCode = releaseVersionCode
+        versionName = releaseVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        create("release") {
+            val ksPath = System.getenv("JARVIS_KEYSTORE_PATH")
+            if (!ksPath.isNullOrBlank() && file(ksPath).exists()) {
+                storeFile = file(ksPath)
+                storePassword = System.getenv("JARVIS_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("JARVIS_KEY_ALIAS")
+                keyPassword = System.getenv("JARVIS_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("debug")
+            val releaseSign = signingConfigs.getByName("release")
+            signingConfig = if (releaseSign.storeFile != null) {
+                releaseSign
+            } else {
+                signingConfigs.getByName("debug")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -68,7 +88,6 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
-    implementation(libs.androidx.compose.material.icons.extended)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 

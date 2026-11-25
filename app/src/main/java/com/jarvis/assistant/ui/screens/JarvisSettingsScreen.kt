@@ -25,20 +25,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.outlined.VolumeUp
-import androidx.compose.material.icons.outlined.AutoAwesome
-import androidx.compose.material.icons.outlined.BookmarkBorder
-import androidx.compose.material.icons.outlined.GraphicEq
-import androidx.compose.material.icons.outlined.History
-import androidx.compose.material.icons.outlined.Key
-import androidx.compose.material.icons.outlined.NotificationsActive
-import androidx.compose.material.icons.outlined.Palette
-import androidx.compose.material.icons.outlined.PhoneAndroid
-import androidx.compose.material.icons.outlined.RecordVoiceOver
-import androidx.compose.material.icons.outlined.Security
-import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -69,6 +55,7 @@ import com.jarvis.assistant.agent.JarvisSettings
 import com.jarvis.assistant.assist.JarvisAssistActivity
 import com.jarvis.assistant.device.DeviceTelemetry
 import com.jarvis.assistant.device.HyperOsSetupHelper
+import com.jarvis.assistant.ui.components.JarvisIcons
 import com.jarvis.assistant.ui.components.MiniJarvisOrb
 import com.jarvis.assistant.ui.theme.JarvisPalette
 
@@ -195,13 +182,13 @@ fun JarvisSettingsScreen(
                 ) {
                     HeroActionPill(
                         label = "Preview wake",
-                        icon = Icons.Outlined.GraphicEq,
+                        icon = JarvisIcons.Wave,
                         accent = accent,
                         onClick = launchWakeOverlay
                     )
                     HeroActionPill(
                         label = "Test voice",
-                        icon = Icons.AutoMirrored.Outlined.VolumeUp,
+                        icon = JarvisIcons.Speaker,
                         accent = JarvisPalette.TextPrimary,
                         onClick = onTestVoice
                     )
@@ -213,7 +200,7 @@ fun JarvisSettingsScreen(
         item {
             SettingsGroup(title = "Intelligence") {
                 NavigationRow(
-                    icon = Icons.Outlined.Key,
+                    icon = JarvisIcons.Key,
                     title = "Provider & API key",
                     value = keyStatusLabel,
                     valueColor = if (settings.hasActiveCloudKey() || settings.provider == AiProvider.LOCAL_ONLY) {
@@ -223,14 +210,14 @@ fun JarvisSettingsScreen(
                 )
                 GroupDivider()
                 NavigationRow(
-                    icon = Icons.Outlined.AutoAwesome,
+                    icon = JarvisIcons.Sparkle,
                     title = "Model",
                     value = activeModelLabel,
                     onClick = { activeSheet = ActiveSettingsSheet.MODEL }
                 )
                 GroupDivider()
                 NavigationRow(
-                    icon = Icons.Outlined.Security,
+                    icon = JarvisIcons.Shield,
                     title = "Safety & confirmations",
                     value = settings.safetyMode.displayName,
                     onClick = { activeSheet = ActiveSettingsSheet.SAFETY }
@@ -242,7 +229,7 @@ fun JarvisSettingsScreen(
         item {
             SettingsGroup(title = "Voice & appearance") {
                 NavigationRow(
-                    icon = Icons.Outlined.RecordVoiceOver,
+                    icon = JarvisIcons.Voice,
                     title = "Voice",
                     value = buildString {
                         append(settings.voiceProfile.geminiVoiceName)
@@ -257,7 +244,7 @@ fun JarvisSettingsScreen(
                 )
                 GroupDivider()
                 ToggleRow(
-                    icon = Icons.Outlined.Tune,
+                    icon = JarvisIcons.Sliders,
                     title = "Hands-free follow-up",
                     checked = settings.continuousConversation,
                     accent = accent,
@@ -265,7 +252,7 @@ fun JarvisSettingsScreen(
                 )
                 GroupDivider()
                 ToggleRow(
-                    icon = Icons.Outlined.NotificationsActive,
+                    icon = JarvisIcons.Bell,
                     title = "Sound cues",
                     checked = settings.soundEffectsEnabled,
                     accent = accent,
@@ -278,7 +265,7 @@ fun JarvisSettingsScreen(
         item {
             SettingsGroup(title = "Xiaomi 15T Pro") {
                 NavigationRow(
-                    icon = Icons.Outlined.PhoneAndroid,
+                    icon = JarvisIcons.Phone,
                     title = "Default assistant",
                     value = if (telemetry.isDefaultAssistant) "Active" else "Set up",
                     valueColor = if (telemetry.isDefaultAssistant) JarvisPalette.Success else accent,
@@ -286,7 +273,7 @@ fun JarvisSettingsScreen(
                 )
                 GroupDivider()
                 NavigationRow(
-                    icon = Icons.Outlined.Security,
+                    icon = JarvisIcons.Shield,
                     title = "Phone permissions",
                     value = "$readyCount of 7 ready",
                     valueColor = if (readyCount >= 6) JarvisPalette.Success else JarvisPalette.TextSecondary,
@@ -299,14 +286,14 @@ fun JarvisSettingsScreen(
         item {
             SettingsGroup(title = "Data") {
                 NavigationRow(
-                    icon = Icons.Outlined.BookmarkBorder,
+                    icon = JarvisIcons.Bookmark,
                     title = "Memory",
                     value = if (memories.isEmpty()) "Empty" else "${memories.size} saved",
                     onClick = { activeSheet = ActiveSettingsSheet.MEMORY }
                 )
                 GroupDivider()
                 NavigationRow(
-                    icon = Icons.Outlined.History,
+                    icon = JarvisIcons.Clock,
                     title = "Activity log",
                     value = if (auditLogs.isEmpty()) "None" else "${auditLogs.size}",
                     onClick = { activeSheet = ActiveSettingsSheet.ACTIVITY }
@@ -423,7 +410,7 @@ private fun NavigationRow(
         )
         Spacer(Modifier.width(4.dp))
         Icon(
-            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            imageVector = JarvisIcons.ChevronRight,
             contentDescription = null,
             tint = JarvisPalette.TextTertiary,
             modifier = Modifier.size(18.dp)
@@ -484,7 +471,7 @@ private fun FinishSwatchRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
-            imageVector = Icons.Outlined.Palette,
+            imageVector = JarvisIcons.Palette,
             contentDescription = null,
             tint = JarvisPalette.TextSecondary,
             modifier = Modifier.size(20.dp)

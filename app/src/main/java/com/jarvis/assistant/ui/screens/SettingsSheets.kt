@@ -21,12 +21,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -71,6 +65,7 @@ import com.jarvis.assistant.agent.RiskLevel
 import com.jarvis.assistant.agent.SafetyMode
 import com.jarvis.assistant.device.DeviceTelemetry
 import com.jarvis.assistant.device.HyperOsSetupHelper
+import com.jarvis.assistant.ui.components.JarvisIcons
 import com.jarvis.assistant.ui.theme.JarvisPalette
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -172,7 +167,7 @@ private fun ApiKeySheetContent(
                 trailing = {
                     IconButton(onClick = { reveal = !reveal }) {
                         Icon(
-                            if (reveal) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            if (reveal) JarvisIcons.EyeOff else JarvisIcons.Eye,
                             contentDescription = "Toggle visibility",
                             tint = JarvisPalette.TextSecondary
                         )
@@ -208,7 +203,7 @@ private fun ApiKeySheetContent(
                 trailing = {
                     IconButton(onClick = { reveal = !reveal }) {
                         Icon(
-                            if (reveal) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            if (reveal) JarvisIcons.EyeOff else JarvisIcons.Eye,
                             contentDescription = "Toggle visibility",
                             tint = JarvisPalette.TextSecondary
                         )
@@ -280,7 +275,7 @@ private fun ModelPickerSheetContent(
                     Text(model.description, fontSize = 12.5.sp, color = JarvisPalette.TextSecondary)
                 }
                 if (selected) {
-                    Icon(Icons.Default.Check, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+                    Icon(JarvisIcons.Check, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
                 }
             }
             if (idx < GeminiModel.entries.lastIndex) SheetDivider()
@@ -313,7 +308,7 @@ private fun VoiceStudioSheetContent(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
             ) {
-                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
+                Icon(JarvisIcons.Play, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(4.dp))
                 Text("Sample", fontSize = 13.sp, color = JarvisPalette.TextPrimary)
             }
@@ -335,7 +330,7 @@ private fun VoiceStudioSheetContent(
                     Text(profile.displayName, fontSize = 14.5.sp, color = if (selected) accent else JarvisPalette.TextPrimary)
                     Text(profile.subtitle, fontSize = 12.sp, color = JarvisPalette.TextSecondary)
                 }
-                if (selected) Icon(Icons.Default.Check, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+                if (selected) Icon(JarvisIcons.Check, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
             }
             if (idx < JarvisVoiceProfile.entries.lastIndex) SheetDivider()
         }
@@ -435,7 +430,7 @@ private fun SafetySheetContent(
                     Text(mode.displayName, fontSize = 15.sp, color = if (selected) accent else JarvisPalette.TextPrimary)
                     Text(mode.description, fontSize = 12.sp, color = JarvisPalette.TextSecondary)
                 }
-                if (selected) Icon(Icons.Default.Check, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+                if (selected) Icon(JarvisIcons.Check, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
             }
             if (idx < SafetyMode.entries.lastIndex) SheetDivider()
         }
@@ -578,7 +573,7 @@ private fun MemorySheetContent(
                         Text(m.content, fontSize = 12.5.sp, color = JarvisPalette.TextSecondary)
                     }
                     IconButton(onClick = { onDeleteMemory(m.id) }, modifier = Modifier.size(34.dp)) {
-                        Icon(Icons.Default.DeleteOutline, contentDescription = "Delete", tint = JarvisPalette.TextSecondary, modifier = Modifier.size(18.dp))
+                        Icon(JarvisIcons.Trash, contentDescription = "Delete", tint = JarvisPalette.TextSecondary, modifier = Modifier.size(18.dp))
                     }
                 }
                 if (idx < memories.lastIndex) SheetDivider()
