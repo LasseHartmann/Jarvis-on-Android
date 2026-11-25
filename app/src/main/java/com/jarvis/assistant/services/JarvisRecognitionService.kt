@@ -1,6 +1,9 @@
 package com.jarvis.assistant.services
 
+import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognitionService
@@ -9,18 +12,19 @@ import android.speech.SpeechRecognizer
 /**
  * Required by Android's VoiceInteractionServiceInfo so VoiceInteractionManagerService
  * actively binds JarvisVoiceInteractionService when selected as the phone's Default Digital Assistant.
+ * Explicitly delegates to an external system recognizer to guarantee zero self-recursion.
  */
 class JarvisRecognitionService : RecognitionService() {
 
     private var delegateRecognizer: SpeechRecognizer? = null
 
     override fun onStartListening(recognizerIntent: Intent, listener: Callback) {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+        runCatching { delegateRecognizer?.destroy() }
+        val recognizer = createExternalDelegate()
+        if (recognizer == null) {
             runCatching { listener.error(SpeechRecognizer.ERROR_CLIENT) }
             return
         }
-        runCatching { delegateRecognizer?.destroy() }
-        val recognizer = SpeechRecognizer.createSpeechRecognizer(this)
         delegateRecognizer = recognizer
         recognizer.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {
@@ -58,6 +62,27 @@ class JarvisRecognitionService : RecognitionService() {
             override fun onEvent(eventType: Int, params: Bundle?) = Unit
         })
         recognizer.startListening(recognizerIntent)
+    }
+
+    private fun createExternalDelegate(): SpeechRecognizer? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            SpeechRecognizer.isOnDeviceRecognitionAvailable(this)
+        ) {
+            return runCatching { SpeechRecognizer.createOnDeviceSpeechRecognizer(this) }.getOrNull()
+        }
+        val intent = Intent(SERVICE_INTERFACE)
+        val services = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.queryIntentServices(intent, PackageManager.ResolveInfoFlags.of(0))
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.queryIntentServices(intent, 0)
+        }
+        val external = services
+            .mapNotNull { it.serviceInfo }
+            .firstOrNull { it.packageName != packageName }
+            ?.let { ComponentName(it.packageName, it.name) }
+            ?: return null
+        return runCatching { SpeechRecognizer.createSpeechRecognizer(this, external) }.getOrNull()
     }
 
     override fun onCancel(listener: Callback) {

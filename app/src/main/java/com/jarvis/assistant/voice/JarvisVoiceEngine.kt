@@ -1,18 +1,23 @@
 package com.jarvis.assistant.voice
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.speech.RecognitionListener
+import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -71,6 +76,8 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
     private var onFinalResultCallback: ((String) -> Unit)? = null
     private var onErrorCallback: ((String) -> Unit)? = null
     private var onDirectTtsFinishedCallback: (() -> Unit)? = null
+    private var pendingStartRunnable: Runnable? = null
+    private var activeListenToken: Long = 0L
 
     init {
         tts = TextToSpeech(appContext, this)
@@ -320,88 +327,208 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
         onErrorCallback = onError
 
         mainHandler.post {
-            if (!SpeechRecognizer.isRecognitionAvailable(appContext)) {
+            pendingStartRunnable?.let { mainHandler.removeCallbacks(it) }
+            val hadExisting = speechRecognizer != null
+            destroyRecognizerQuietly()
+
+            val token = ++activeListenToken
+            val preferOnDevice = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext)
+
+            val launchTask = Runnable {
+                if (token != activeListenToken) return@Runnable
+                startRecognizerAttempt(
+                    token = token,
+                    useOnDevice = preferOnDevice,
+                    attempt = 0
+                )
+            }
+            pendingStartRunnable = launchTask
+            // Brief binder cooldown if we just tore down a previous recognizer instance
+            if (hadExisting) {
+                mainHandler.postDelayed(launchTask, 140L)
+            } else {
+                launchTask.run()
+            }
+        }
+    }
+
+    private fun startRecognizerAttempt(
+        token: Long,
+        useOnDevice: Boolean,
+        attempt: Int
+    ) {
+        if (token != activeListenToken) return
+
+        val recognizer = createRecognizerInstance(useOnDevice)
+        if (recognizer == null) {
+            _isListening.value = false
+            onErrorCallback?.invoke("No speech recognition engine available on this device.")
+            return
+        }
+
+        speechRecognizer = recognizer
+        Log.i(TAG, "Starting SpeechRecognizer (onDevice=$useOnDevice, attempt=$attempt)")
+
+        recognizer.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) {
+                if (token != activeListenToken) return
+                _isListening.value = true
+                _partialTranscript.value = ""
+            }
+
+            override fun onBeginningOfSpeech() = Unit
+
+            override fun onRmsChanged(rmsdB: Float) {
+                if (token != activeListenToken) return
+                val normalized = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
+                _rmsLevel.value = normalized
+            }
+
+            override fun onBufferReceived(buffer: ByteArray?) = Unit
+
+            override fun onEndOfSpeech() {
+                _rmsLevel.value = 0f
+            }
+
+            override fun onError(error: Int) {
+                if (token != activeListenToken) return
+                Log.w(TAG, "SpeechRecognizer error=$error (onDevice=$useOnDevice, attempt=$attempt)")
+
+                // Automatically recover from transient Android 13-15 binder/server disconnects & language pack gaps
+                val recoverableErrors = setOf(
+                    SpeechRecognizer.ERROR_SERVER_DISCONNECTED, // 11
+                    SpeechRecognizer.ERROR_CLIENT,              // 5
+                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY,     // 8
+                    12, // ERROR_LANGUAGE_NOT_SUPPORTED
+                    13  // ERROR_LANGUAGE_UNAVAILABLE
+                )
+                if (error in recoverableErrors && attempt < 2) {
+                    destroyRecognizerQuietly()
+                    val nextOnDevice = if (attempt == 0) !useOnDevice else false
+                    val retryTask = Runnable {
+                        startRecognizerAttempt(
+                            token = token,
+                            useOnDevice = nextOnDevice,
+                            attempt = attempt + 1
+                        )
+                    }
+                    pendingStartRunnable = retryTask
+                    mainHandler.postDelayed(retryTask, 220L)
+                    return
+                }
+
                 _isListening.value = false
-                onError("No speech recognition engine available on this device.")
-                return@post
+                _rmsLevel.value = 0f
+                val msg = when (error) {
+                    SpeechRecognizer.ERROR_NO_MATCH -> "No speech detected."
+                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Listening timed out."
+                    SpeechRecognizer.ERROR_AUDIO -> "Microphone audio error."
+                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Microphone permission required."
+                    SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Speech network unavailable."
+                    SpeechRecognizer.ERROR_SERVER_DISCONNECTED -> "Speech service disconnected — tap orb to retry."
+                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Speech recognizer busy — tap orb to retry."
+                    else -> "Speech recognizer error ($error)."
+                }
+                onErrorCallback?.invoke(msg)
             }
 
-            runCatching { speechRecognizer?.destroy() }
-            val recognizer = SpeechRecognizer.createSpeechRecognizer(appContext)
-            speechRecognizer = recognizer
-            recognizer.setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) {
-                    _isListening.value = true
-                    _partialTranscript.value = ""
+            override fun onResults(results: Bundle?) {
+                if (token != activeListenToken) return
+                _isListening.value = false
+                _rmsLevel.value = 0f
+                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                val best = matches?.firstOrNull()?.trim().orEmpty()
+                _partialTranscript.value = ""
+                if (best.isNotBlank()) {
+                    onFinalResultCallback?.invoke(best)
+                } else {
+                    onErrorCallback?.invoke("Didn't catch that.")
                 }
-
-                override fun onBeginningOfSpeech() = Unit
-
-                override fun onRmsChanged(rmsdB: Float) {
-                    val normalized = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
-                    _rmsLevel.value = normalized
-                }
-
-                override fun onBufferReceived(buffer: ByteArray?) = Unit
-
-                override fun onEndOfSpeech() {
-                    _rmsLevel.value = 0f
-                }
-
-                override fun onError(error: Int) {
-                    _isListening.value = false
-                    _rmsLevel.value = 0f
-                    val msg = when (error) {
-                        SpeechRecognizer.ERROR_NO_MATCH -> "No speech detected."
-                        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Listening timed out."
-                        SpeechRecognizer.ERROR_AUDIO -> "Microphone audio error."
-                        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Microphone permission required."
-                        SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Speech network unavailable."
-                        else -> "Speech recognizer error ($error)."
-                    }
-                    onErrorCallback?.invoke(msg)
-                }
-
-                override fun onResults(results: Bundle?) {
-                    _isListening.value = false
-                    _rmsLevel.value = 0f
-                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    val best = matches?.firstOrNull()?.trim().orEmpty()
-                    _partialTranscript.value = ""
-                    if (best.isNotBlank()) {
-                        onFinalResultCallback?.invoke(best)
-                    } else {
-                        onErrorCallback?.invoke("Didn't catch that.")
-                    }
-                }
-
-                override fun onPartialResults(partialResults: Bundle?) {
-                    val partial = partialResults
-                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        ?.firstOrNull()
-                        .orEmpty()
-                    if (partial.isNotBlank()) {
-                        _partialTranscript.value = partial
-                    }
-                }
-
-                override fun onEvent(eventType: Int, params: Bundle?) = Unit
-            })
-
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1300L)
             }
-            _isListening.value = true
+
+            override fun onPartialResults(partialResults: Bundle?) {
+                if (token != activeListenToken) return
+                val partial = partialResults
+                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull()
+                    .orEmpty()
+                if (partial.isNotBlank()) {
+                    _partialTranscript.value = partial
+                }
+            }
+
+            override fun onEvent(eventType: Int, params: Bundle?) = Unit
+        })
+
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, appContext.packageName)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1300L)
+        }
+        _isListening.value = true
+        runCatching {
             recognizer.startListening(intent)
+        }.onFailure { err ->
+            Log.e(TAG, "startListening threw: ${err.message}")
+            _isListening.value = false
+            onErrorCallback?.invoke("Unable to start speech recognizer.")
+        }
+    }
+
+    private fun createRecognizerInstance(useOnDevice: Boolean): SpeechRecognizer? {
+        if (useOnDevice && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext)
+        ) {
+            return runCatching { SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext) }.getOrNull()
+        }
+        if (SpeechRecognizer.isRecognitionAvailable(appContext)) {
+            // Explicitly prefer an external Google/system RecognitionService so we never bind ourselves
+            val external = findExternalRecognitionComponent()
+            if (external != null) {
+                return runCatching { SpeechRecognizer.createSpeechRecognizer(appContext, external) }.getOrNull()
+            }
+            return runCatching { SpeechRecognizer.createSpeechRecognizer(appContext) }.getOrNull()
+        }
+        return null
+    }
+
+    private fun findExternalRecognitionComponent(): ComponentName? = runCatching {
+        val intent = Intent(RecognitionService.SERVICE_INTERFACE)
+        val services = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            appContext.packageManager.queryIntentServices(intent, PackageManager.ResolveInfoFlags.of(0))
+        } else {
+            @Suppress("DEPRECATION")
+            appContext.packageManager.queryIntentServices(intent, 0)
+        }
+        val candidates = services
+            .mapNotNull { it.serviceInfo }
+            .filter { it.packageName != appContext.packageName }
+        val preferred = candidates.firstOrNull { it.packageName == "com.google.android.as" }
+            ?: candidates.firstOrNull { it.packageName == "com.google.android.tts" }
+            ?: candidates.firstOrNull { it.packageName == "com.google.android.googlequicksearchbox" }
+            ?: candidates.firstOrNull()
+        preferred?.let { ComponentName(it.packageName, it.name) }
+    }.getOrNull()
+
+    private fun destroyRecognizerQuietly() {
+        val current = speechRecognizer
+        speechRecognizer = null
+        if (current != null) {
+            runCatching { current.cancel() }
+            runCatching { current.destroy() }
         }
     }
 
     fun stopListening() {
         mainHandler.post {
+            activeListenToken++
+            pendingStartRunnable?.let { mainHandler.removeCallbacks(it) }
+            pendingStartRunnable = null
             runCatching { speechRecognizer?.stopListening() }
+            destroyRecognizerQuietly()
             _isListening.value = false
             _rmsLevel.value = 0f
         }
@@ -411,8 +538,10 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
         stopSpeaking()
         engineScope.cancel()
         mainHandler.post {
-            runCatching { speechRecognizer?.destroy() }
-            speechRecognizer = null
+            activeListenToken++
+            pendingStartRunnable?.let { mainHandler.removeCallbacks(it) }
+            pendingStartRunnable = null
+            destroyRecognizerQuietly()
             tts?.stop()
             tts?.shutdown()
             tts = null
@@ -424,4 +553,8 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
             .replace(Regex("\\s+"), " ")
             .trim()
             .take(600)
+
+    companion object {
+        private const val TAG = "JarvisVoice"
+    }
 }

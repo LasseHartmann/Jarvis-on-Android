@@ -6,21 +6,29 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 
 class JarvisAccessibilityService : AccessibilityService() {
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        Log.i(TAG, "JarvisAccessibilityService connected (canPerformGestures=true)")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val pkg = event?.packageName?.toString()
-        if (!pkg.isNullOrBlank()) {
+        if (!pkg.isNullOrBlank() && pkg != packageName) {
             currentForegroundPackage = pkg
         }
     }
@@ -36,8 +44,30 @@ class JarvisAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
+    /**
+     * Looks past J.A.R.V.I.S.'s own translucent voice overlay window to target the real
+     * underlying application window (e.g. Spotify, WhatsApp, Settings, Launcher).
+     */
+    private fun findTargetApplicationRoot(): AccessibilityNodeInfo? {
+        val underlying = runCatching {
+            windows
+                .filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+                .mapNotNull { w -> w.root?.let { r -> w.layer to r } }
+                .filter { (_, r) -> r.packageName?.toString() != packageName }
+                .maxByOrNull { (layer, _) -> layer }
+                ?.second
+        }.getOrNull()
+        if (underlying != null) return underlying
+
+        val active = rootInActiveWindow
+        if (active != null && active.packageName?.toString() != packageName) {
+            return active
+        }
+        return active
+    }
+
     fun captureScreenSnapshot(): ScreenSnapshot? {
-        val root = rootInActiveWindow ?: return null
+        val root = findTargetApplicationRoot() ?: return null
         val dm = resources.displayMetrics
         val pkg = root.packageName?.toString().orEmpty().ifBlank { currentForegroundPackage }
         val isSensitive = ScreenTreeSerializer.isSensitivePackage(pkg)
@@ -65,6 +95,8 @@ class JarvisAccessibilityService : AccessibilityService() {
             )
 
             if (isMeaningful) {
+                @Suppress("DEPRECATION")
+                val checkedState = if (node.isCheckable) node.isChecked else null
                 nodes.add(
                     UiNodeSnapshot(
                         index = counter[0]++,
@@ -79,7 +111,7 @@ class JarvisAccessibilityService : AccessibilityService() {
                         clickable = clickable,
                         editable = editable,
                         scrollable = scrollable,
-                        checked = if (node.isCheckable) node.isChecked else null,
+                        checked = checkedState,
                         focused = node.isFocused,
                         isPassword = isPassword
                     )
@@ -101,11 +133,12 @@ class JarvisAccessibilityService : AccessibilityService() {
             nodes = nodes
         )
         lastSnapshot = snapshot
+        Log.i(TAG, "captureScreenSnapshot: pkg=$pkg nodes=${nodes.size} sensitive=$isSensitive")
         return snapshot
     }
 
     suspend fun tapElement(nodeId: Int?, query: String?): Pair<Boolean, String> {
-        val snapshot = lastSnapshot ?: captureScreenSnapshot()
+        val snapshot = (if (nodeId != null) lastSnapshot else null) ?: captureScreenSnapshot()
             ?: return false to "Unable to inspect active screen window."
 
         val target = when {
@@ -115,7 +148,7 @@ class JarvisAccessibilityService : AccessibilityService() {
         } ?: return false to "Element not found on screen (nodeId=$nodeId, query=$query). Try calling read_screen first."
 
         // Attempt native accessibility click on matching live node first
-        val root = rootInActiveWindow
+        val root = findTargetApplicationRoot()
         if (root != null) {
             val liveMatch = findLiveNodeByBounds(root, target.left, target.top, target.right, target.bottom)
             if (liveMatch != null) {
@@ -127,32 +160,42 @@ class JarvisAccessibilityService : AccessibilityService() {
                 }
                 if (clickableNode != null && clickableNode.isClickable) {
                     if (clickableNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                        return true to "Tapped #${target.index} (${target.primaryLabel.ifBlank { target.viewId }})"
+                        val msg = "Tapped #${target.index} (${target.primaryLabel.ifBlank { target.viewId }}) via ACTION_CLICK"
+                        Log.i(TAG, msg)
+                        return true to msg
                     }
                 }
             }
         }
 
-        // Fallback to precise gesture tap at element center
+        // Brief yield so any transitioning voice overlay has cleared touchable insets
+        delay(120L)
+
+        // Fallback to physical touch gesture at element center
         val tapped = dispatchTap(target.centerX.toFloat(), target.centerY.toFloat())
-        return if (tapped) {
-            true to "Tapped #${target.index} at (${target.centerX}, ${target.centerY})"
+        val msg = if (tapped) {
+            "Tapped #${target.index} at (${target.centerX}, ${target.centerY}) via gesture"
         } else {
-            false to "Failed to dispatch tap gesture on #${target.index}."
+            "Failed to dispatch tap gesture on #${target.index}."
         }
+        Log.i(TAG, "tapElement result ok=$tapped: $msg")
+        return tapped to msg
     }
 
     suspend fun tapNormalizedCoordinates(normX: Float, normY: Float, longPress: Boolean = false): Pair<Boolean, String> {
+        delay(120L)
         val dm = resources.displayMetrics
         val x = (normX.coerceIn(0.01f, 0.99f) * dm.widthPixels)
         val y = (normY.coerceIn(0.01f, 0.99f) * dm.heightPixels)
         val ok = dispatchTap(x, y, durationMs = if (longPress) 700L else 60L)
         val kind = if (longPress) "Long-pressed" else "Tapped"
-        return ok to if (ok) "$kind (${x.toInt()}, ${y.toInt()})" else "Gesture dispatch failed."
+        val msg = if (ok) "$kind (${x.toInt()}, ${y.toInt()})" else "Gesture dispatch failed."
+        Log.i(TAG, "tapNormalizedCoordinates ok=$ok: $msg")
+        return ok to msg
     }
 
     suspend fun typeText(nodeId: Int?, text: String, submit: Boolean): Pair<Boolean, String> {
-        val root = rootInActiveWindow ?: return false to "No active window to receive text."
+        val root = findTargetApplicationRoot() ?: return false to "No active window to receive text."
         val snapshot = lastSnapshot ?: captureScreenSnapshot()
 
         var targetNode: AccessibilityNodeInfo? = null
@@ -189,12 +232,12 @@ class JarvisAccessibilityService : AccessibilityService() {
     }
 
     suspend fun scrollScreen(direction: String): Pair<Boolean, String> {
+        delay(120L)
         val dir = direction.trim().lowercase()
         val dm = resources.displayMetrics
         val w = dm.widthPixels.toFloat()
         val h = dm.heightPixels.toFloat()
 
-        // Swipe gesture is universally reliable across RecyclerViews, WebViews, and Compose LazyLists
         val (x1, y1, x2, y2) = when (dir) {
             "down", "next" -> arrayOf(w * 0.5f, h * 0.72f, w * 0.5f, h * 0.25f)
             "up", "previous" -> arrayOf(w * 0.5f, h * 0.28f, w * 0.5f, h * 0.75f)
@@ -203,6 +246,7 @@ class JarvisAccessibilityService : AccessibilityService() {
             else -> return false to "Invalid scroll direction '$direction'. Use up, down, left, or right."
         }
         val ok = dispatchSwipe(x1, y1, x2, y2, durationMs = 280L)
+        Log.i(TAG, "scrollScreen dir=$dir ok=$ok")
         return ok to if (ok) "Scrolled $dir." else "Failed to dispatch scroll gesture."
     }
 
@@ -223,6 +267,7 @@ class JarvisAccessibilityService : AccessibilityService() {
             else -> return false to "Unknown global action '$action'."
         }
         val ok = performGlobalAction(code)
+        Log.i(TAG, "performGlobalAction action=$normalized ok=$ok")
         return ok to if (ok) "Executed system action: $normalized" else "System rejected global action: $normalized"
     }
 
@@ -254,10 +299,13 @@ class JarvisAccessibilityService : AccessibilityService() {
                     deferred.complete(false)
                 }
             },
-            null
+            mainHandler
         )
-        if (!dispatched) return false
-        return withTimeoutOrNull(2_000L) { deferred.await() } ?: false
+        if (!dispatched) {
+            Log.w(TAG, "dispatchGesture returned false immediately")
+            return false
+        }
+        return withTimeoutOrNull(2_500L) { deferred.await() } ?: false
     }
 
     private fun findBestMatchingNode(nodes: List<UiNodeSnapshot>, query: String): UiNodeSnapshot? {
@@ -301,6 +349,7 @@ class JarvisAccessibilityService : AccessibilityService() {
     }
 
     companion object {
+        private const val TAG = "JarvisPilot"
         private const val MAX_DEPTH = 18
         private const val MAX_NODES = 120
 

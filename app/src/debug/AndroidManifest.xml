@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Debug-only ADB verification receiver (strictly excluded from release APKs) -->
+        <receiver
+            android:name=".debug.DebugPilotReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.jarvis.assistant.DEBUG_PILOT" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
