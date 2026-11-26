@@ -16,72 +16,88 @@ data class DecodedPcm(
 /**
  * Pure Kotlin real-time audio DSP inspired by Iron Man's helmet J.A.R.V.I.S. intercom:
  * 1. High-pass clarity filter (~130 Hz) to remove mud
- * 2. Presence peaking EQ (~2.7 kHz, +3.2 dB) for crisp British RP articulation
- * 3. Broadcast soft-knee dynamic leveling
- * 4. Subtle short multi-tap holographic helmet acoustic reflections (11ms / 22ms / 35ms @ 8% wet)
+ * 2. Presence peaking EQ (~2.7 kHz, +3.2 dB) for crisp articulation
+ * 3. Subtle short multi-tap holographic helmet acoustic reflections (11ms / 22ms / 35ms @ 9% wet)
+ * 4. Broadcast soft-knee dynamic leveling
+ *
+ * Supports both one-shot batch processing and click-free stateful chunk streaming.
  */
 object StarkVoiceDsp {
 
+    class StreamingProcessor(val sampleRateHz: Int) {
+        private val validRate = sampleRateHz.coerceAtLeast(8000)
+        private val hpAlpha: Float
+        private val eq: Biquad
+        private val d1: Int
+        private val d2: Int
+        private val d3: Int
+        private val ringBuf: FloatArray
+        private var ringIdx = 0
+
+        private var prevIn = 0f
+        private var prevHp = 0f
+        private var x1 = 0f
+        private var x2 = 0f
+        private var y1 = 0f
+        private var y2 = 0f
+        private var env = 0.08f
+
+        init {
+            val rc = 1.0f / (2.0f * PI.toFloat() * 130f)
+            val dt = 1.0f / validRate.toFloat()
+            hpAlpha = rc / (rc + dt)
+            eq = computePeakingBiquad(freqHz = 2700f, sampleRateHz = validRate.toFloat(), gainDb = 3.2f, q = 1.15f)
+            d1 = (validRate * 0.011f).toInt().coerceAtLeast(1)
+            d2 = (validRate * 0.022f).toInt().coerceAtLeast(2)
+            d3 = (validRate * 0.035f).toInt().coerceAtLeast(3)
+            ringBuf = FloatArray(d3 + 1)
+        }
+
+        fun processChunk(pcm16Mono: ShortArray): ShortArray {
+            if (pcm16Mono.isEmpty()) return pcm16Mono
+            val n = pcm16Mono.size
+            val out = ShortArray(n)
+            val ringLen = ringBuf.size
+
+            for (i in 0 until n) {
+                val sample = pcm16Mono[i] / 32768f
+
+                // 1. One-pole high-pass (~130 Hz)
+                val hp = hpAlpha * (prevHp + sample - prevIn)
+                prevIn = sample
+                prevHp = hp
+
+                // 2. Biquad peaking EQ at 2700 Hz (+3.2 dB)
+                val eqOut = eq.b0 * hp + eq.b1 * x1 + eq.b2 * x2 - eq.a1 * y1 - eq.a2 * y2
+                x2 = x1
+                x1 = hp
+                y2 = y1
+                y1 = eqOut
+
+                // 3. Multi-tap comb reflections via ring buffer (zero boundary clicks)
+                ringBuf[ringIdx] = eqOut
+                var idx1 = ringIdx - d1; if (idx1 < 0) idx1 += ringLen
+                var idx2 = ringIdx - d2; if (idx2 < 0) idx2 += ringLen
+                var idx3 = ringIdx - d3; if (idx3 < 0) idx3 += ringLen
+                val wet = ringBuf[idx1] * 0.48f - ringBuf[idx2] * 0.31f + ringBuf[idx3] * 0.21f
+                ringIdx++
+                if (ringIdx >= ringLen) ringIdx = 0
+
+                // 4. Mix (91% dry + 9% metallic helmet sheen) + smooth broadcast leveling
+                val mixed = eqOut * 0.91f + wet * 0.09f
+                val level = abs(mixed)
+                env = if (level > env) env * 0.985f + level * 0.015f else env * 0.9992f + level * 0.0008f
+                val gain = (0.24f / env.coerceAtLeast(0.09f)).coerceIn(0.65f, 1.55f)
+                val shaped = tanh((mixed * gain * 1.08f).toDouble()).toFloat()
+                out[i] = (shaped * 31500f).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+            }
+            return out
+        }
+    }
+
     fun processIntercom(pcm16Mono: ShortArray, sampleRateHz: Int): ShortArray {
         if (pcm16Mono.isEmpty() || sampleRateHz <= 0) return pcm16Mono
-        val n = pcm16Mono.size
-        val work = FloatArray(n) { pcm16Mono[it] / 32768f }
-
-        // 1. One-pole high-pass (~130 Hz)
-        val rc = 1.0f / (2.0f * PI.toFloat() * 130f)
-        val dt = 1.0f / sampleRateHz.toFloat()
-        val hpAlpha = rc / (rc + dt)
-        var prevIn = 0f
-        var prevHp = 0f
-        for (i in 0 until n) {
-            val x = work[i]
-            val y = hpAlpha * (prevHp + x - prevIn)
-            prevIn = x
-            prevHp = y
-            work[i] = y
-        }
-
-        // 2. Biquad peaking EQ at 2700 Hz (+3.2 dB, Q=1.15) for Stark comms crispness
-        val eq = computePeakingBiquad(freqHz = 2700f, sampleRateHz = sampleRateHz.toFloat(), gainDb = 3.2f, q = 1.15f)
-        var x1 = 0f
-        var x2 = 0f
-        var y1 = 0f
-        var y2 = 0f
-        for (i in 0 until n) {
-            val x0 = work[i]
-            val y0 = eq.b0 * x0 + eq.b1 * x1 + eq.b2 * x2 - eq.a1 * y1 - eq.a2 * y2
-            x2 = x1
-            x1 = x0
-            y2 = y1
-            y1 = y0
-            work[i] = y0
-        }
-
-        // 3. Subtle holographic helmet early reflections (multi-tap comb)
-        val d1 = (sampleRateHz * 0.011f).toInt().coerceAtLeast(1)
-        val d2 = (sampleRateHz * 0.022f).toInt().coerceAtLeast(2)
-        val d3 = (sampleRateHz * 0.035f).toInt().coerceAtLeast(3)
-        val wet = FloatArray(n)
-        for (i in 0 until n) {
-            var r = 0f
-            if (i >= d1) r += work[i - d1] * 0.48f
-            if (i >= d2) r -= work[i - d2] * 0.31f
-            if (i >= d3) r += work[i - d3] * 0.21f
-            wet[i] = r
-        }
-
-        // 4. Mix (91% dry + 9% metallic helmet sheen) + smooth broadcast leveling
-        val out = ShortArray(n)
-        var env = 0.08f
-        for (i in 0 until n) {
-            val mixed = work[i] * 0.91f + wet[i] * 0.09f
-            val level = abs(mixed)
-            env = if (level > env) env * 0.985f + level * 0.015f else env * 0.9992f + level * 0.0008f
-            val gain = (0.24f / env.coerceAtLeast(0.09f)).coerceIn(0.65f, 1.55f)
-            val shaped = tanh((mixed * gain * 1.08f).toDouble()).toFloat()
-            out[i] = (shaped * 31500f).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
-        }
-        return out
+        return StreamingProcessor(sampleRateHz).processChunk(pcm16Mono)
     }
 
     fun pcmBytesToShortsLittleEndian(bytes: ByteArray): ShortArray {

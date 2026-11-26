@@ -29,6 +29,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -66,6 +67,7 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
     @Volatile
     private var activeAudioTrack: AudioTrack? = null
     private var activeSpeakJob: Job? = null
+    private var activeStreamSession: SpeechStreamSession? = null
     private val synthesisWaiters = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
 
     private val _isListening = MutableStateFlow(false)
@@ -188,10 +190,183 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
         }
     }
 
+    /**
+     * Pipelined sentence-by-sentence streaming speech session.
+     * Pre-fetches sentence N+1 over HTTP SSE while sentence N plays through a single persistent
+     * AudioTrack + stateful StarkVoiceDsp.StreamingProcessor (zero clicks, minimal inter-sentence gap).
+     */
+    inner class SpeechStreamSession(
+        private val options: JarvisSpeechOptions,
+        private val onAudioStarted: (() -> Unit)?,
+        private val onAllFinished: (() -> Unit)?
+    ) {
+        private val sentenceQueue = Channel<String>(Channel.UNLIMITED)
+        private val job: Job
+        @Volatile
+        private var finishedCalled = false
+        @Volatile
+        private var audioStartedNotified = false
+
+        init {
+            job = engineScope.launch {
+                _isSpeaking.value = true
+                val prefetchPipe = Channel<Pair<String, Channel<DecodedPcm>>>(capacity = 2)
+
+                // Producer: starts streaming each queued sentence up to 2 sentences ahead
+                val producer = launch {
+                    try {
+                        for (rawSentence in sentenceQueue) {
+                            val clean = sanitizeForSpeech(rawSentence)
+                            if (clean.isBlank()) continue
+                            val chunkChan = Channel<DecodedPcm>(capacity = 32)
+                            prefetchPipe.send(clean to chunkChan)
+                            launch {
+                                try {
+                                    streamSentenceToChannel(clean, options, chunkChan)
+                                } finally {
+                                    chunkChan.close()
+                                }
+                            }
+                        }
+                    } finally {
+                        prefetchPipe.close()
+                    }
+                }
+
+                // Consumer: plays PCM chunks seamlessly through ONE persistent AudioTrack & stateful DSP
+                var track: AudioTrack? = null
+                var trackRate = 0
+                var dsp: StarkVoiceDsp.StreamingProcessor? = null
+                var playedAnyAudio = false
+
+                try {
+                    for ((sentenceText, chunkChan) in prefetchPipe) {
+                        var sentenceHadPcm = false
+                        for (pcm in chunkChan) {
+                            if (pcm.samples.isEmpty()) continue
+                            sentenceHadPcm = true
+                            playedAnyAudio = true
+
+                            if (track == null || trackRate != pcm.sampleRateHz) {
+                                drainAndReleaseTrack(track, waitDrain = track != null)
+                                track = openStreamingAudioTrack(pcm.sampleRateHz)
+                                trackRate = pcm.sampleRateHz
+                                dsp = if (options.intercomDspEnabled) {
+                                    StarkVoiceDsp.StreamingProcessor(pcm.sampleRateHz)
+                                } else null
+                            }
+
+                            val processed = dsp?.processChunk(pcm.samples) ?: pcm.samples
+                            if (!audioStartedNotified) {
+                                audioStartedNotified = true
+                                mainHandler.post { onAudioStarted?.invoke() }
+                            }
+                            writeSamplesToTrack(track, processed)
+                        }
+
+                        // If both Gemini TTS & offline WAV synthesis returned nothing, speak sentence directly via Android TTS
+                        if (!sentenceHadPcm && ttsReady) {
+                            drainAndReleaseTrack(track, waitDrain = true)
+                            track = null
+                            dsp = null
+                            if (!audioStartedNotified) {
+                                audioStartedNotified = true
+                                mainHandler.post { onAudioStarted?.invoke() }
+                            }
+                            speakDirectTtsBlocking(sentenceText, options)
+                        }
+                    }
+                    drainAndReleaseTrack(track, waitDrain = playedAnyAudio)
+                } catch (_: Throwable) {
+                    drainAndReleaseTrack(track, waitDrain = false)
+                } finally {
+                    producer.cancel()
+                    _isSpeaking.value = false
+                    if (activeStreamSession === this@SpeechStreamSession) {
+                        activeStreamSession = null
+                    }
+                    if (!finishedCalled) {
+                        finishedCalled = true
+                        mainHandler.post { onAllFinished?.invoke() }
+                    }
+                }
+            }
+        }
+
+        fun enqueueSentence(sentence: String) {
+            if (sentence.isNotBlank()) {
+                sentenceQueue.trySend(sentence)
+            }
+        }
+
+        fun finish() {
+            sentenceQueue.close()
+        }
+
+        fun cancel() {
+            finishedCalled = true
+            sentenceQueue.close()
+            job.cancel()
+        }
+    }
+
+    fun openSpeechStream(
+        options: JarvisSpeechOptions,
+        onAudioStarted: (() -> Unit)? = null,
+        onAllFinished: (() -> Unit)? = null
+    ): SpeechStreamSession {
+        stopSpeaking()
+        val session = SpeechStreamSession(options, onAudioStarted, onAllFinished)
+        activeStreamSession = session
+        return session
+    }
+
+    private suspend fun streamSentenceToChannel(
+        cleanText: String,
+        options: JarvisSpeechOptions,
+        out: Channel<DecodedPcm>
+    ) {
+        if (!options.preferInstantLocal && options.neuralVoiceEnabled && options.geminiApiKey.isNotBlank()) {
+            val streamed = geminiTtsClient.streamJarvisSpeech(
+                apiKey = options.geminiApiKey,
+                text = cleanText,
+                voiceName = options.neuralVoiceName,
+                language = options.language
+            ) { chunk ->
+                out.send(chunk)
+            }
+            if (streamed) return
+        }
+
+        if (!options.preferInstantLocal && ttsReady && options.intercomDspEnabled) {
+            val offlinePcm = synthesizeOfflineTtsToPcm(cleanText, options.speechRate, options.pitch, options.language)
+            if (offlinePcm != null && offlinePcm.samples.isNotEmpty()) {
+                out.send(offlinePcm)
+            }
+        }
+    }
+
+    private suspend fun speakDirectTtsBlocking(cleanText: String, options: JarvisSpeechOptions) {
+        val waiter = CompletableDeferred<Boolean>()
+        onDirectTtsFinishedCallback = { waiter.complete(true) }
+        withContext(Dispatchers.Main) {
+            configureVoiceForLanguage(options.language)
+            tts?.setSpeechRate(options.speechRate.coerceIn(0.6f, 1.6f))
+            tts?.setPitch(options.pitch.coerceIn(0.6f, 1.4f))
+            val id = "jarvis_${UUID.randomUUID().toString().take(8)}"
+            val res = tts?.speak(cleanText, TextToSpeech.QUEUE_FLUSH, null, id)
+            if (res != TextToSpeech.SUCCESS) {
+                waiter.complete(false)
+            }
+        }
+        withTimeoutOrNull(18_000L) { waiter.await() }
+    }
+
     fun speak(
         text: String,
         options: JarvisSpeechOptions,
-        onFinished: (() -> Unit)? = null
+        onFinished: (() -> Unit)? = null,
+        onAudioStarted: (() -> Unit)? = null
     ) {
         val clean = sanitizeForSpeech(text)
         if (clean.isBlank()) {
@@ -199,58 +374,41 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
             return
         }
 
-        stopSpeaking()
-        activeSpeakJob = engineScope.launch {
-            _isSpeaking.value = true
-            try {
-                // Tier 1: Authentic Neural J.A.R.V.I.S. Voice via Gemini TTS + Stark Helmet Intercom DSP
-                // Skipped when preferInstantLocal=true (e.g. time-sensitive voice confirmation prompts)
-                var pcm: DecodedPcm? = null
-                if (!options.preferInstantLocal && options.neuralVoiceEnabled && options.geminiApiKey.isNotBlank()) {
-                    pcm = geminiTtsClient.synthesizeJarvisSpeech(
-                        apiKey = options.geminiApiKey,
-                        text = clean,
-                        voiceName = options.neuralVoiceName,
-                        language = options.language
-                    )
-                }
-
-                // Tier 2: Offline Male Android TTS synthesized into WAV + Stark Helmet Intercom DSP
-                if (!options.preferInstantLocal && pcm == null && ttsReady && options.intercomDspEnabled) {
-                    pcm = synthesizeOfflineTtsToPcm(clean, options.speechRate, options.pitch, options.language)
-                }
-
-                if (pcm != null && pcm.samples.isNotEmpty()) {
-                    val processed = if (options.intercomDspEnabled) {
-                        StarkVoiceDsp.processIntercom(pcm.samples, pcm.sampleRateHz)
+        if (options.preferInstantLocal) {
+            stopSpeaking()
+            activeSpeakJob = engineScope.launch {
+                _isSpeaking.value = true
+                try {
+                    if (ttsReady) {
+                        onDirectTtsFinishedCallback = onFinished
+                        withContext(Dispatchers.Main) {
+                            configureVoiceForLanguage(options.language)
+                            tts?.setSpeechRate(options.speechRate.coerceIn(0.6f, 1.6f))
+                            tts?.setPitch(options.pitch.coerceIn(0.6f, 1.4f))
+                            val id = "jarvis_${UUID.randomUUID().toString().take(8)}"
+                            onAudioStarted?.invoke()
+                            tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, id)
+                        }
                     } else {
-                        pcm.samples
+                        _isSpeaking.value = false
+                        mainHandler.post { onFinished?.invoke() }
                     }
-                    playPcmBlocking(processed, pcm.sampleRateHz)
-                    _isSpeaking.value = false
-                    mainHandler.post { onFinished?.invoke() }
-                    return@launch
-                }
-
-                // Tier 3: Direct Android Male TTS fallback (EN-GB or DE-DE)
-                if (ttsReady) {
-                    onDirectTtsFinishedCallback = onFinished
-                    withContext(Dispatchers.Main) {
-                        configureVoiceForLanguage(options.language)
-                        tts?.setSpeechRate(options.speechRate.coerceIn(0.6f, 1.6f))
-                        tts?.setPitch(options.pitch.coerceIn(0.6f, 1.4f))
-                        val id = "jarvis_${UUID.randomUUID().toString().take(8)}"
-                        tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, id)
-                    }
-                } else {
+                } catch (_: Throwable) {
                     _isSpeaking.value = false
                     mainHandler.post { onFinished?.invoke() }
                 }
-            } catch (_: Throwable) {
-                _isSpeaking.value = false
-                mainHandler.post { onFinished?.invoke() }
             }
+            return
         }
+
+        // Streaming Tier 1 (Gemini SSE) -> Tier 2 (Offline WAV + DSP) -> Tier 3 (Direct Android Male TTS)
+        val session = openSpeechStream(
+            options = options,
+            onAudioStarted = onAudioStarted,
+            onAllFinished = onFinished
+        )
+        session.enqueueSentence(clean)
+        session.finish()
     }
 
     private suspend fun synthesizeOfflineTtsToPcm(
@@ -286,7 +444,7 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
         return decoded
     }
 
-    private fun playPcmBlocking(samples: ShortArray, sampleRateHz: Int) {
+    private fun openStreamingAudioTrack(sampleRateHz: Int): AudioTrack {
         val minBuf = AudioTrack.getMinBufferSize(
             sampleRateHz,
             AudioFormat.CHANNEL_OUT_MONO,
@@ -312,20 +470,29 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
             .build()
 
         activeAudioTrack = track
+        track.play()
+        return track
+    }
+
+    private fun writeSamplesToTrack(track: AudioTrack, samples: ShortArray) {
+        var offset = 0
+        val chunkSize = 2048
+        while (offset < samples.size && activeAudioTrack === track) {
+            val count = minOf(chunkSize, samples.size - offset)
+            val written = track.write(samples, offset, count, AudioTrack.WRITE_BLOCKING)
+            if (written <= 0) break
+            offset += written
+        }
+    }
+
+    private fun drainAndReleaseTrack(track: AudioTrack?, waitDrain: Boolean) {
+        if (track == null) return
         try {
-            track.play()
-            var offset = 0
-            val chunkSize = 2048
-            while (offset < samples.size && activeAudioTrack === track) {
-                val count = minOf(chunkSize, samples.size - offset)
-                val written = track.write(samples, offset, count, AudioTrack.WRITE_BLOCKING)
-                if (written <= 0) break
-                offset += written
+            if (waitDrain && activeAudioTrack === track) {
+                Thread.sleep(130L)
             }
-            // Allow final audio buffer to drain cleanly (~120ms)
-            if (activeAudioTrack === track) {
-                Thread.sleep(140L)
-            }
+        } catch (_: InterruptedException) {
+            // Cancelled cleanly
         } finally {
             runCatching {
                 if (track.playState == AudioTrack.PLAYSTATE_PLAYING) track.stop()
@@ -336,6 +503,8 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
     }
 
     fun stopSpeaking() {
+        activeStreamSession?.cancel()
+        activeStreamSession = null
         activeSpeakJob?.cancel()
         activeSpeakJob = null
         onDirectTtsFinishedCallback = null

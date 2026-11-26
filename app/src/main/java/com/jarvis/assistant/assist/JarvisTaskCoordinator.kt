@@ -13,6 +13,7 @@ import com.jarvis.assistant.data.JarvisRepository
 import com.jarvis.assistant.data.SecureSettingsStore
 import com.jarvis.assistant.voice.JarvisSpeechOptions
 import com.jarvis.assistant.voice.JarvisVoiceEngine
+import com.jarvis.assistant.voice.SentenceChunker
 import com.jarvis.assistant.voice.StarkCue
 import com.jarvis.assistant.voice.StarkSoundEffects
 import kotlinx.coroutines.CoroutineScope
@@ -30,6 +31,8 @@ import kotlinx.coroutines.withContext
 interface OverlaySessionHandle {
     fun isOverlayVisible(): Boolean
     fun dismissForScreenPilot()
+    fun onDirectiveStreamingCaption(text: String, audioStarted: Boolean)
+    fun onStreamingSpeechComplete(finalReply: String, shouldExitImmediately: Boolean)
     fun onDirectiveReplyReady(reply: String, shouldExitImmediately: Boolean, replyLanguage: SpokenLanguage)
     fun onDirectiveAborted()
     fun onVoiceConfirmationPrompt(pending: PendingConfirmation, language: SpokenLanguage)
@@ -136,9 +139,64 @@ class JarvisTaskCoordinator(
 
         _taskActive.value = true
         activeTaskJob = appScope.launch {
+            val streamLock = Any()
+            var streamSession: JarvisVoiceEngine.SpeechStreamSession? = null
+            val sentenceChunker = SentenceChunker()
+            var streamExitImmediately = false
+            var streamFinalReply = ""
+            var streamAudioStarted = false
+
             try {
                 val history = repository.messages.value.dropLast(1)
-                val outcome = orchestrator.processUserInput(spoken, history, langHint)
+                val outcome = orchestrator.processUserInput(
+                    rawInput = spoken,
+                    recentHistory = history,
+                    detectedLanguageHint = langHint,
+                    onStreamingText = { accumulated, delta, streamLang ->
+                        val started = synchronized(streamLock) { streamAudioStarted }
+                        appScope.launch {
+                            activeOverlay?.takeIf { it.isOverlayVisible() }
+                                ?.onDirectiveStreamingCaption(accumulated, started)
+                        }
+
+                        val s = settingsStore.current()
+                        if (!s.ttsEnabled) return@processUserInput
+
+                        synchronized(streamLock) {
+                            val readySentences = sentenceChunker.append(delta)
+                            if (readySentences.isEmpty()) return@synchronized
+
+                            val session = streamSession ?: run {
+                                val overlayCurrentlyVisible = activeOverlay?.isOverlayVisible() == true
+                                if (!overlayCurrentlyVisible) {
+                                    _headlessSpeechActive.value = true
+                                }
+                                voiceEngine.openSpeechStream(
+                                    options = buildSpeechOptions(s, language = streamLang),
+                                    onAudioStarted = {
+                                        val caption = synchronized(streamLock) {
+                                            streamAudioStarted = true
+                                            streamFinalReply.ifBlank { accumulated }
+                                        }
+                                        activeOverlay?.takeIf { it.isOverlayVisible() }
+                                            ?.onDirectiveStreamingCaption(caption, audioStarted = true)
+                                    },
+                                    onAllFinished = {
+                                        _headlessSpeechActive.value = false
+                                        val (replySnap, exitSnap) = synchronized(streamLock) {
+                                            streamFinalReply to streamExitImmediately
+                                        }
+                                        val ov = activeOverlay
+                                        if (ov != null && ov.isOverlayVisible()) {
+                                            ov.onStreamingSpeechComplete(replySnap, exitSnap)
+                                        }
+                                    }
+                                ).also { streamSession = it }
+                            }
+                            readySentences.forEach { session.enqueueSentence(it) }
+                        }
+                    }
+                )
                 lastSpokenLanguage = outcome.replyLanguage
 
                 repository.addMessage(
@@ -153,20 +211,35 @@ class JarvisTaskCoordinator(
                 val overlay = activeOverlay
 
                 if (outcome.aborted) {
+                    synchronized(streamLock) { streamSession?.cancel() }
+                    _headlessSpeechActive.value = false
                     soundEffects.play(StarkCue.ABORT)
                     overlay?.onDirectiveAborted()
                     return@launch
                 }
 
                 soundEffects.play(StarkCue.DONE)
-                if (overlay != null && overlay.isOverlayVisible()) {
+                val activeStream = synchronized(streamLock) { streamSession }
+                if (activeStream != null) {
+                    // Streamed sentence TTS already running — flush final fragment and finish cleanly!
+                    val started = synchronized(streamLock) {
+                        streamFinalReply = outcome.reply
+                        streamExitImmediately = usedScreenOrApp
+                        sentenceChunker.flush()?.let { activeStream.enqueueSentence(it) }
+                        streamAudioStarted
+                    }
+                    if (overlay != null && overlay.isOverlayVisible()) {
+                        overlay.onDirectiveStreamingCaption(outcome.reply, started)
+                    }
+                    activeStream.finish()
+                } else if (overlay != null && overlay.isOverlayVisible()) {
                     overlay.onDirectiveReplyReady(
                         reply = outcome.reply,
                         shouldExitImmediately = usedScreenOrApp,
                         replyLanguage = outcome.replyLanguage
                     )
                 } else {
-                    // Overlay already hid for screen piloting — speak the final J.A.R.V.I.S. confirmation cleanly over the target app!
+                    // Overlay already hid for screen piloting — stream final J.A.R.V.I.S. reply over the target app!
                     val settings = settingsStore.current()
                     if (settings.ttsEnabled) {
                         _headlessSpeechActive.value = true
@@ -177,6 +250,10 @@ class JarvisTaskCoordinator(
                         )
                     }
                 }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                synchronized(streamLock) { streamSession?.cancel() }
+                _headlessSpeechActive.value = false
+                throw ce
             } finally {
                 _taskActive.value = false
             }

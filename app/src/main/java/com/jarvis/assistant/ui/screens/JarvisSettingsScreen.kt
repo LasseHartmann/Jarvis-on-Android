@@ -234,10 +234,15 @@ fun JarvisSettingsScreen(
         // GROUP 2: VOICE & APPEARANCE
         item {
             SettingsGroup(title = "Voice & appearance") {
+                val shortLang = when (settings.languageMode) {
+                    com.jarvis.assistant.agent.JarvisLanguageMode.BILINGUAL_EN_DE -> "EN + DE"
+                    com.jarvis.assistant.agent.JarvisLanguageMode.ENGLISH_ONLY -> "English"
+                    com.jarvis.assistant.agent.JarvisLanguageMode.GERMAN_ONLY -> "Deutsch"
+                }
                 NavigationRow(
                     icon = JarvisIcons.Voice,
                     title = "Voice & language",
-                    value = "${settings.languageMode.displayName} · ${settings.voiceProfile.geminiVoiceName}",
+                    value = "$shortLang · ${settings.voiceProfile.geminiVoiceName}",
                     onClick = { activeSheet = ActiveSettingsSheet.VOICE }
                 )
                 GroupDivider()

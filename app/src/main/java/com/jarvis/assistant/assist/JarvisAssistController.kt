@@ -137,6 +137,29 @@ class JarvisAssistController(
         onDismissImmediate()
     }
 
+    override fun onDirectiveStreamingCaption(text: String, audioStarted: Boolean) {
+        if (!visible) return
+        val st = if (audioStarted) JarvisState.SPEAKING else JarvisState.THINKING
+        val tag = if (audioStarted) "Jarvis" else "Thinking"
+        overlayView.updateState(st, tag, text, "")
+    }
+
+    override fun onStreamingSpeechComplete(finalReply: String, shouldExitImmediately: Boolean) {
+        if (!visible) return
+        val settings = container.settingsStore.current()
+        scope.launch {
+            if (!shouldExitImmediately && settings.continuousConversation) {
+                delay(280L)
+                if (visible) beginVoiceListening(isFollowUp = true)
+            } else if (shouldExitImmediately || settings.autoDismissAfterReply) {
+                delay(450L)
+                if (visible) dismissOverlayGracefully()
+            } else {
+                overlayView.updateState(JarvisState.IDLE, "Standby", finalReply, "Tap orb to speak")
+            }
+        }
+    }
+
     override fun onDirectiveReplyReady(
         reply: String,
         shouldExitImmediately: Boolean,

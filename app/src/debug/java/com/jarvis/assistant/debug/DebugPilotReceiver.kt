@@ -102,6 +102,25 @@ class DebugPilotReceiver : BroadcastReceiver() {
                         }
                     }
 
+                    "bench_tts" -> {
+                        val app = context.applicationContext as? JarvisApplication
+                        val container = app?.container
+                        if (container != null) {
+                            val s = container.settingsStore.current()
+                            val start = System.currentTimeMillis()
+                            container.voiceEngine.speak(
+                                text = "J.A.R.V.I.S. streaming audio online, Sir.",
+                                options = container.taskCoordinator.buildSpeechOptions(s),
+                                onAudioStarted = {
+                                    Log.i(TAG, "BENCH_TTS_AUDIO_START: ${System.currentTimeMillis() - start}ms")
+                                },
+                                onFinished = {
+                                    Log.i(TAG, "BENCH_TTS_DONE: ${System.currentTimeMillis() - start}ms")
+                                }
+                            )
+                        }
+                    }
+
                     else -> Log.w(TAG, "RESULT: unknown action=$action")
                 }
             } finally {

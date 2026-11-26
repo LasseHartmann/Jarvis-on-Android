@@ -30,4 +30,11 @@ interface LlmClient {
         messages: List<LlmMessage>,
         tools: List<ToolSpec>
     ): LlmResponse
+
+    suspend fun completeStreaming(
+        systemPrompt: String,
+        messages: List<LlmMessage>,
+        tools: List<ToolSpec>,
+        onTextDelta: (String) -> Unit
+    ): LlmResponse = complete(systemPrompt, messages, tools)
 }

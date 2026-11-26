@@ -1,7 +1,10 @@
 package com.jarvis.assistant.agent
 
+import android.util.Log
 import com.jarvis.assistant.tools.ToolSpec
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -42,6 +45,117 @@ class GeminiLlmClient(
             }
             parseResponseBody(bodyStr)
         }
+    }
+
+    override suspend fun completeStreaming(
+        systemPrompt: String,
+        messages: List<LlmMessage>,
+        tools: List<ToolSpec>,
+        onTextDelta: (String) -> Unit
+    ): LlmResponse = withContext(Dispatchers.IO) {
+        val cleanModel = model.trim().removePrefix("models/").ifBlank { AiProvider.GEMINI.defaultModel }
+        val url = "${baseUrl.trimEnd('/')}/models/$cleanModel:streamGenerateContent?alt=sse&key=${apiKey.trim()}"
+        val payload = buildRequestBody(systemPrompt, messages, tools)
+        val startMs = System.currentTimeMillis()
+
+        val request = Request.Builder()
+            .url(url)
+            .header("Accept", "text/event-stream")
+            .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        httpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                val bodyStr = response.body?.string().orEmpty()
+                val errMsg = extractErrorMessage(bodyStr).ifBlank { "HTTP ${response.code}" }
+                throw IOException("Gemini API error (${response.code}): $errMsg")
+            }
+            val source = response.body?.source()
+                ?: return@use LlmResponse(text = "No response returned by Gemini.")
+
+            val acc = StreamAccumulator()
+            var firstTokenLogged = false
+            while (true) {
+                currentCoroutineContext().ensureActive()
+                val line = source.readUtf8Line() ?: break
+                if (!line.startsWith("data:")) continue
+                val dataJson = line.removePrefix("data:").trim()
+                if (dataJson.isEmpty() || dataJson == "[DONE]") continue
+
+                val delta = consumeSseChunk(dataJson, acc)
+                if (delta.isNotEmpty() && acc.toolCalls.isEmpty()) {
+                    if (!firstTokenLogged) {
+                        firstTokenLogged = true
+                        Log.i(TAG, "LLM stream first-token=${System.currentTimeMillis() - startMs}ms model=$cleanModel")
+                    }
+                    onTextDelta(delta)
+                }
+            }
+            acc.toResponse()
+        }
+    }
+
+    internal class StreamAccumulator {
+        val spokenText = StringBuilder()
+        val toolCalls = mutableListOf<ToolCall>()
+        val rawParts = JSONArray()
+        var blockReason: String = ""
+
+        fun toResponse(): LlmResponse {
+            val text = spokenText.toString().trim()
+            if (text.isEmpty() && toolCalls.isEmpty() && blockReason.isNotBlank()) {
+                return LlmResponse("Request blocked by Gemini safety filter ($blockReason).")
+            }
+            return LlmResponse(
+                text = text,
+                toolCalls = toolCalls.toList(),
+                rawGeminiParts = if (rawParts.length() > 0) JSONArray(rawParts.toString()) else null
+            )
+        }
+    }
+
+    internal fun consumeSseChunk(dataJson: String, acc: StreamAccumulator): String {
+        val root = runCatching { JSONObject(dataJson) }.getOrNull() ?: return ""
+        val candidates = root.optJSONArray("candidates")
+        if (candidates == null || candidates.length() == 0) {
+            val br = root.optJSONObject("promptFeedback")?.optString("blockReason").orEmpty()
+            if (br.isNotBlank()) acc.blockReason = br
+            return ""
+        }
+        val parts = candidates.getJSONObject(0).optJSONObject("content")?.optJSONArray("parts") ?: return ""
+        val deltaBuilder = StringBuilder()
+
+        for (i in 0 until parts.length()) {
+            val part = parts.getJSONObject(i)
+            acc.rawParts.put(JSONObject(part.toString()))
+
+            val isInternalThought = part.optBoolean("thought", false)
+            val txt = part.optString("text", "")
+            if (txt.isNotEmpty() && !isInternalThought) {
+                acc.spokenText.append(txt)
+                deltaBuilder.append(txt)
+            }
+
+            val fnCall = part.optJSONObject("functionCall")
+            if (fnCall != null) {
+                val name = fnCall.optString("name", "")
+                val args = fnCall.optJSONObject("args") ?: JSONObject()
+                val sig = part.optString("thoughtSignature", "")
+                    .ifBlank { part.optString("thought_signature", "") }
+                    .ifBlank { null }
+                if (name.isNotBlank()) {
+                    acc.toolCalls.add(
+                        ToolCall(
+                            id = "gem_${UUID.randomUUID().toString().take(8)}",
+                            name = name,
+                            arguments = args,
+                            thoughtSignature = sig
+                        )
+                    )
+                }
+            }
+        }
+        return deltaBuilder.toString()
     }
 
     internal fun buildRequestBody(
@@ -230,6 +344,7 @@ class GeminiLlmClient(
     }.getOrDefault(body.take(200))
 
     companion object {
+        private const val TAG = "GeminiLlm"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
         fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()

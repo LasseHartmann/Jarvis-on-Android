@@ -67,7 +67,8 @@ class JarvisOrchestrator(
     suspend fun processUserInput(
         rawInput: String,
         recentHistory: List<ChatMessage>,
-        detectedLanguageHint: String? = null
+        detectedLanguageHint: String? = null,
+        onStreamingText: ((accumulated: String, delta: String, replyLanguage: SpokenLanguage) -> Unit)? = null
     ): OrchestratorOutcome {
         abortFlag.set(false)
         _liveTraces.value = emptyList()
@@ -160,7 +161,19 @@ class JarvisOrchestrator(
                 }
 
                 transition(JarvisState.THINKING, "Neural cycle $step/$maxSteps...")
-                val response = llmClient.complete(systemPrompt, messages, toolSpecs)
+                val stepBuffer = StringBuilder()
+                val response = llmClient.completeStreaming(systemPrompt, messages, toolSpecs) { delta ->
+                    if (!abortFlag.get() && delta.isNotEmpty()) {
+                        stepBuffer.append(delta)
+                        val accText = stepBuffer.toString()
+                        val streamLang = if (settings.languageMode == JarvisLanguageMode.BILINGUAL_EN_DE && accText.length >= 16) {
+                            JarvisLanguageDetector.detectReplyLanguage(accText, fallback = userLang)
+                        } else {
+                            userLang
+                        }
+                        onStreamingText?.invoke(accText, delta, streamLang)
+                    }
+                }
 
                 if (abortFlag.get()) {
                     transition(JarvisState.IDLE, "Aborted")
