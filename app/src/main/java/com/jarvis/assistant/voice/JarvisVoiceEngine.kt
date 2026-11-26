@@ -432,7 +432,10 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
             destroyRecognizerQuietly()
 
             val token = ++activeListenToken
-            val preferOnDevice = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            // On-device AiAi only handles installed offline packs; for bilingual EN+DE use GoogleTTS first
+            // unless on-device packs are verified, with automatic fallback between both engines.
+            val preferOnDevice = languageMode != JarvisLanguageMode.BILINGUAL_EN_DE &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
                 SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext)
 
             val launchTask = Runnable {
@@ -521,8 +524,8 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
                 if (error in recoverableErrors && attempt < 2) {
                     destroyRecognizerQuietly()
                     val isLangPackError = error == 12 || error == 13
-                    val nextOnDevice = if (attempt == 0) !useOnDevice else false
-                    val nextLangSwitch = if (isLangPackError && attempt >= 1) false else enableLanguageSwitch
+                    val nextOnDevice = if (attempt == 0 && !isLangPackError) !useOnDevice else false
+                    val nextLangSwitch = if (isLangPackError) false else enableLanguageSwitch
                     val retryTask = Runnable {
                         startRecognizerAttempt(
                             token = token,
@@ -624,9 +627,11 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
         val candidates = services
             .mapNotNull { it.serviceInfo }
             .filter { it.packageName != appContext.packageName }
-        val preferred = candidates.firstOrNull { it.packageName == "com.google.android.as" }
-            ?: candidates.firstOrNull { it.packageName == "com.google.android.tts" }
+        // Prefer GoogleTTSRecognitionService (cloud + offline multilingual EN/DE) as external recognizer,
+        // avoiding AiAi here since createOnDeviceSpeechRecognizer already targets AiAi.
+        val preferred = candidates.firstOrNull { it.packageName == "com.google.android.tts" }
             ?: candidates.firstOrNull { it.packageName == "com.google.android.googlequicksearchbox" }
+            ?: candidates.firstOrNull { it.packageName == "com.google.android.as" }
             ?: candidates.firstOrNull()
         preferred?.let { ComponentName(it.packageName, it.name) }
     }.getOrNull()

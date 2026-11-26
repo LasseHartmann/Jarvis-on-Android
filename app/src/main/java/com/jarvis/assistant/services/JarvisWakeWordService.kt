@@ -68,6 +68,8 @@ class JarvisWakeWordService : Service() {
     private var activeSessionToken = 0L
     private var consecutiveErrors = 0
     private var lastTriggerMs = 0L
+    private var preferOnDeviceEngine = false
+    private var allowLangSwitch = true
 
     private var pendingRestartRunnable: Runnable? = null
     private var pendingWakeRunnable: Runnable? = null
@@ -226,20 +228,24 @@ class JarvisWakeWordService : Service() {
         detectedLangHint = null
 
         val token = ++activeSessionToken
-        val preferOnDevice = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+        val useOnDevice = preferOnDeviceEngine &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
             SpeechRecognizer.isOnDeviceRecognitionAvailable(this)
 
-        val recognizer = createStandbyRecognizer(useOnDevice = preferOnDevice)
+        val recognizer = createStandbyRecognizer(useOnDevice = useOnDevice)
         if (recognizer == null) {
             Log.w(TAG, "No standby SpeechRecognizer available")
             return
         }
         standbyRecognizer = recognizer
 
+        val enableLangSwitch = activeLanguageMode == JarvisLanguageMode.BILINGUAL_EN_DE && allowLangSwitch
+
         recognizer.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {
                 if (token != activeSessionToken) return
                 consecutiveErrors = 0
+                Log.i(TAG, "Standby wake-word recognizer READY (onDevice=$useOnDevice, langSwitch=$enableLangSwitch)")
             }
 
             override fun onBeginningOfSpeech() = Unit
@@ -312,13 +318,23 @@ class JarvisWakeWordService : Service() {
                     320L
                 } else {
                     consecutiveErrors = (consecutiveErrors + 1).coerceAtMost(5)
+                    // Dynamically adapt engine & language-switch flags when a recognizer rejects a pack/mode
+                    if (error == 12 || error == 13) {
+                        if (useOnDevice) {
+                            preferOnDeviceEngine = false
+                        } else {
+                            allowLangSwitch = false
+                        }
+                    } else if (error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED || error == SpeechRecognizer.ERROR_CLIENT) {
+                        preferOnDeviceEngine = !useOnDevice
+                    }
                     val backoff = when (consecutiveErrors) {
-                        1 -> 900L
-                        2 -> 1_800L
-                        3 -> 3_500L
+                        1 -> 500L
+                        2 -> 1_200L
+                        3 -> 3_000L
                         else -> 7_000L
                     }
-                    Log.w(TAG, "Standby recognizer error=$error, backing off ${backoff}ms")
+                    Log.w(TAG, "Standby recognizer error=$error (onDevice=$useOnDevice, langSwitch=$enableLangSwitch), backing off ${backoff}ms")
                     backoff
                 }
                 scheduleStandbyStart(delayMs = restartDelay)
@@ -327,14 +343,12 @@ class JarvisWakeWordService : Service() {
             override fun onEvent(eventType: Int, params: Bundle?) = Unit
         })
 
-        // Use on-device segmented bilingual recognition when available; disable language switch on retry fallback
-        val enableLangSwitch = activeLanguageMode == JarvisLanguageMode.BILINGUAL_EN_DE && consecutiveErrors < 2
         val intent = JarvisVoiceEngine.buildSpeechIntent(
             callingPackage = packageName,
             languageMode = activeLanguageMode,
             enableLanguageSwitch = enableLangSwitch,
             completeSilenceMs = 1_650L,
-            segmentedSession = preferOnDevice
+            segmentedSession = false
         )
 
         runCatching {
@@ -455,9 +469,10 @@ class JarvisWakeWordService : Service() {
             packageManager.queryIntentServices(intent, 0)
         }
         val candidates = services.mapNotNull { it.serviceInfo }.filter { it.packageName != packageName }
-        val preferred = candidates.firstOrNull { it.packageName == "com.google.android.as" }
-            ?: candidates.firstOrNull { it.packageName == "com.google.android.tts" }
+        // Prefer GoogleTTSRecognitionService (supports both EN + DE cleanly), fall back to Google QuickSearchBox or AiAi
+        val preferred = candidates.firstOrNull { it.packageName == "com.google.android.tts" }
             ?: candidates.firstOrNull { it.packageName == "com.google.android.googlequicksearchbox" }
+            ?: candidates.firstOrNull { it.packageName == "com.google.android.as" }
             ?: candidates.firstOrNull()
         preferred?.let { ComponentName(it.packageName, it.name) }
     }.getOrNull()
