@@ -404,7 +404,7 @@ private fun VoiceStudioSheetContent(
         SheetDivider()
         SheetToggleRow(
             title = "Pause wake word when screen off",
-            subtitle = "Saves battery in pocket; resumes when screen wakes",
+            subtitle = "On-device ONNX detector (zero cloud audio); resumes on wake",
             checked = settings.wakeWordPauseScreenOff,
             accent = accent,
             onCheckedChange = { v -> onUpdateSettings { it.copy(wakeWordPauseScreenOff = v) } }

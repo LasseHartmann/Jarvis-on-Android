@@ -7,6 +7,10 @@
 -dontwarn org.bouncycastle.**
 -dontwarn org.openjsse.**
 
+# ONNX Runtime JNI bridge for local on-device openWakeWord ("Hey Jarvis")
+-keep class ai.onnxruntime.** { *; }
+-dontwarn ai.onnxruntime.**
+
 # Keep Android service and assist overlay entry points intact
 -keep class com.jarvis.assistant.services.** { *; }
 -keep class com.jarvis.assistant.assist.JarvisAssistActivity { *; }

@@ -1,81 +1,69 @@
 package com.jarvis.assistant.services
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.os.Build
-import android.os.Bundle
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import android.os.PowerManager
-import android.speech.RecognitionListener
-import android.speech.RecognitionService
-import android.speech.SpeechRecognizer
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.jarvis.assistant.JarvisApplication
 import com.jarvis.assistant.MainActivity
 import com.jarvis.assistant.R
-import com.jarvis.assistant.agent.JarvisLanguageMode
 import com.jarvis.assistant.agent.JarvisSettings
-import com.jarvis.assistant.voice.JarvisVoiceEngine
-import com.jarvis.assistant.voice.WakeWordDetector
+import com.jarvis.assistant.voice.OpenWakeWordEngine
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * Low-footprint standby microphone service that listens locally (on-device SpeechRecognizer)
- * for "Jarvis" / "Hey Jarvis" in both English and German and immediately pops up the
- * J.A.R.V.I.S. 3D neural overlay.
+ * 100% local, zero-cloud hands-free wake-word service powered by openWakeWord ONNX
+ * ("hey_jarvis_v0.1.onnx") reading raw 16 kHz PCM from AudioRecord.
  *
- * Automatically yields the microphone whenever Jarvis's overlay is active, a task or TTS
- * is running, a phone/VoIP call is active, or the screen is off (when configured).
+ * - Sends zero audio over the network while listening in standby
+ * - Never disconnects on idle timeouts or network blips
+ * - Immediately releases AudioRecord when "Hey Jarvis" is detected, during active Jarvis
+ *   sessions, during phone/VoIP calls, or when the screen is off (when configured)
  */
 class JarvisWakeWordService : Service() {
 
-    private val mainHandler = Handler(Looper.getMainLooper())
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    private var standbyRecognizer: SpeechRecognizer? = null
+    private var wakeEngine: OpenWakeWordEngine? = null
     private var stateObserveJob: Job? = null
+    private var audioLoopJob: Job? = null
     private var screenReceiverRegistered = false
 
     private val screenInteractive = MutableStateFlow(true)
-    private var shouldBeListening = false
-    private var activeLanguageMode = JarvisLanguageMode.BILINGUAL_EN_DE
-    private var activeSessionToken = 0L
-    private var consecutiveErrors = 0
+    @Volatile
     private var lastTriggerMs = 0L
-    private var preferOnDeviceEngine = false
-    private var allowLangSwitch = true
-
-    private var pendingRestartRunnable: Runnable? = null
-    private var pendingWakeRunnable: Runnable? = null
-    private var pendingOneShotCommand: String = ""
-    private var detectedLangHint: String? = null
-    private var wakeTriggeredInCurrentSession = false
 
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -131,7 +119,9 @@ class JarvisWakeWordService : Service() {
         _isRunning.value = false
         stateObserveJob?.cancel()
         stateObserveJob = null
-        stopStandbyRecognizer()
+        stopAudioLoop()
+        wakeEngine?.close()
+        wakeEngine = null
         if (screenReceiverRegistered) {
             runCatching { unregisterReceiver(screenReceiver) }
             screenReceiverRegistered = false
@@ -182,300 +172,165 @@ class JarvisWakeWordService : Service() {
                 Triple(settings, jarvisBusy, isScreenOn)
             }.collectLatest { (settings, jarvisBusy, isScreenOn) ->
                 if (!settings.wakeWordEnabled) {
-                    stopStandbyRecognizer()
+                    stopAudioLoop()
                     stopSelf()
                     return@collectLatest
                 }
 
-                activeLanguageMode = settings.languageMode
                 val screenAllowed = isScreenOn || !settings.wakeWordPauseScreenOff
-                val allowStandby = !jarvisBusy && screenAllowed && !isPhoneCallActive()
+                val allowStandby = !jarvisBusy && screenAllowed
 
                 if (allowStandby) {
-                    if (!shouldBeListening) {
-                        shouldBeListening = true
-                        consecutiveErrors = 0
-                        scheduleStandbyStart(delayMs = 550L)
-                    }
+                    startAudioLoop()
                 } else {
-                    shouldBeListening = false
-                    stopStandbyRecognizer()
+                    stopAudioLoop()
                 }
             }
         }
     }
 
-    private fun scheduleStandbyStart(delayMs: Long) {
-        pendingRestartRunnable?.let { mainHandler.removeCallbacks(it) }
-        val task = Runnable {
-            pendingRestartRunnable = null
-            if (!shouldBeListening) return@Runnable
-            if (isPhoneCallActive()) {
-                scheduleStandbyStart(delayMs = 3_000L)
-                return@Runnable
-            }
-            startStandbyRecognizer()
-        }
-        pendingRestartRunnable = task
-        mainHandler.postDelayed(task, delayMs)
-    }
+    private fun startAudioLoop() {
+        if (audioLoopJob?.isActive == true) return
 
-    private fun startStandbyRecognizer() {
-        destroyStandbyRecognizerQuietly()
-        cancelPendingWake()
-        wakeTriggeredInCurrentSession = false
-        pendingOneShotCommand = ""
-        detectedLangHint = null
+        audioLoopJob = serviceScope.launch(Dispatchers.Default) {
+            // Brief cooldown after an overlay/TTS session so mic hardware is settled
+            delay(350L)
 
-        val token = ++activeSessionToken
-        val useOnDevice = preferOnDeviceEngine &&
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            SpeechRecognizer.isOnDeviceRecognitionAvailable(this)
+            val engine = wakeEngine ?: runCatching {
+                OpenWakeWordEngine.fromAssets(applicationContext).also { wakeEngine = it }
+            }.onFailure { err ->
+                Log.e(TAG, "Failed to load local openWakeWord ONNX models: ${err.message}", err)
+            }.getOrNull() ?: return@launch
 
-        val recognizer = createStandbyRecognizer(useOnDevice = useOnDevice)
-        if (recognizer == null) {
-            Log.w(TAG, "No standby SpeechRecognizer available")
-            return
-        }
-        standbyRecognizer = recognizer
+            engine.reset()
+            val chunk = ShortArray(OpenWakeWordEngine.CHUNK_SAMPLES)
+            var consecutiveAbove = 0
 
-        val enableLangSwitch = activeLanguageMode == JarvisLanguageMode.BILINGUAL_EN_DE && allowLangSwitch
-
-        recognizer.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {
-                if (token != activeSessionToken) return
-                consecutiveErrors = 0
-                Log.i(TAG, "Standby wake-word recognizer READY (onDevice=$useOnDevice, langSwitch=$enableLangSwitch)")
-            }
-
-            override fun onBeginningOfSpeech() = Unit
-            override fun onRmsChanged(rmsdB: Float) = Unit
-            override fun onBufferReceived(buffer: ByteArray?) = Unit
-            override fun onEndOfSpeech() = Unit
-
-            override fun onLanguageDetection(results: Bundle) {
-                if (token != activeSessionToken) return
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    val tag = results.getString(SpeechRecognizer.DETECTED_LANGUAGE)
-                    if (!tag.isNullOrBlank()) {
-                        detectedLangHint = tag
-                    }
-                }
-            }
-
-            override fun onPartialResults(partialResults: Bundle?) {
-                if (token != activeSessionToken || wakeTriggeredInCurrentSession) return
-                val text = partialResults
-                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull()
-                    .orEmpty()
-                handlePartialTranscript(token, text)
-            }
-
-            override fun onSegmentResults(segmentResults: Bundle) {
-                if (token != activeSessionToken || wakeTriggeredInCurrentSession) return
-                val text = segmentResults
-                    .getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull()
-                    .orEmpty()
-                handleFinalTranscript(token, text, keepAlive = true)
-            }
-
-            override fun onEndOfSegmentedSession() {
-                if (token != activeSessionToken) return
-                if (!wakeTriggeredInCurrentSession && shouldBeListening) {
-                    scheduleStandbyStart(delayMs = 350L)
-                }
-            }
-
-            override fun onResults(results: Bundle?) {
-                if (token != activeSessionToken) return
-                val text = results
-                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull()
-                    .orEmpty()
-                handleFinalTranscript(token, text, keepAlive = false)
-            }
-
-            override fun onError(error: Int) {
-                if (token != activeSessionToken) return
-                if (wakeTriggeredInCurrentSession) return
-
-                // If a trailing one-shot command was already captured before silence timeout, fire it cleanly!
-                if (pendingWakeRunnable != null) {
-                    val cmd = pendingOneShotCommand
-                    cancelPendingWake()
-                    triggerWakePopup(cmd)
-                    return
+            while (isActive) {
+                if (isPhoneCallActive()) {
+                    delay(1_500L)
+                    continue
                 }
 
-                if (!shouldBeListening) return
+                val recorder = createAudioRecord()
+                if (recorder == null) {
+                    Log.w(TAG, "AudioRecord unavailable — retrying in 2s")
+                    delay(2_000L)
+                    continue
+                }
 
-                val isSilentTimeout = error == SpeechRecognizer.ERROR_NO_MATCH ||
-                    error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
-                val restartDelay = if (isSilentTimeout) {
-                    consecutiveErrors = 0
-                    320L
-                } else {
-                    consecutiveErrors = (consecutiveErrors + 1).coerceAtMost(5)
-                    // Dynamically adapt engine & language-switch flags when a recognizer rejects a pack/mode
-                    if (error == 12 || error == 13) {
-                        if (useOnDevice) {
-                            preferOnDeviceEngine = false
-                        } else {
-                            allowLangSwitch = false
+                try {
+                    recorder.startRecording()
+                    engine.reset()
+                    consecutiveAbove = 0
+                    Log.i(TAG, "Local OpenWakeWord READY (16kHz ONNX 'Hey Jarvis', threshold=$DETECTION_THRESHOLD)")
+
+                    while (isActive) {
+                        if (isPhoneCallActive()) break
+
+                        val read = readFullChunk(recorder, chunk)
+                        if (read < 0) {
+                            Log.w(TAG, "AudioRecord read error=$read — restarting recorder")
+                            break
                         }
-                    } else if (error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED || error == SpeechRecognizer.ERROR_CLIENT) {
-                        preferOnDeviceEngine = !useOnDevice
+                        if (read < chunk.size) continue
+
+                        val score = engine.processPcm16Chunk(chunk)
+                        if (score < 0f) continue
+
+                        if (score >= 0.25f) {
+                            Log.d(TAG, "Hey Jarvis score=${"%.3f".format(score)}")
+                        }
+
+                        if (score >= DETECTION_THRESHOLD) {
+                            consecutiveAbove++
+                        } else {
+                            consecutiveAbove = 0
+                        }
+
+                        // Trigger immediately on strong hit (>=0.52) or 2 consecutive frames >= threshold
+                        if (score >= STRONG_THRESHOLD || consecutiveAbove >= 2) {
+                            val now = System.currentTimeMillis()
+                            if (now - lastTriggerMs >= TRIGGER_COOLDOWN_MS) {
+                                lastTriggerMs = now
+                                Log.i(TAG, "LOCAL WAKE WORD DETECTED! 'Hey Jarvis' score=${"%.3f".format(score)}")
+                                // Stop & release AudioRecord BEFORE popping up the assistant overlay!
+                                releaseRecorderQuietly(recorder)
+                                engine.reset()
+                                delay(40L)
+                                JarvisVoiceInteractionService.triggerAssistantPopup(applicationContext)
+                                return@launch
+                            }
+                        }
                     }
-                    val backoff = when (consecutiveErrors) {
-                        1 -> 500L
-                        2 -> 1_200L
-                        3 -> 3_000L
-                        else -> 7_000L
-                    }
-                    Log.w(TAG, "Standby recognizer error=$error (onDevice=$useOnDevice, langSwitch=$enableLangSwitch), backing off ${backoff}ms")
-                    backoff
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (err: Throwable) {
+                    Log.w(TAG, "Wake-word audio loop exception: ${err.message}")
+                    delay(1_000L)
+                } finally {
+                    releaseRecorderQuietly(recorder)
                 }
-                scheduleStandbyStart(delayMs = restartDelay)
             }
+        }
+    }
 
-            override fun onEvent(eventType: Int, params: Bundle?) = Unit
-        })
+    private fun stopAudioLoop() {
+        audioLoopJob?.cancel()
+        audioLoopJob = null
+    }
 
-        val intent = JarvisVoiceEngine.buildSpeechIntent(
-            callingPackage = packageName,
-            languageMode = activeLanguageMode,
-            enableLanguageSwitch = enableLangSwitch,
-            completeSilenceMs = 1_650L,
-            segmentedSession = false
+    @SuppressLint("MissingPermission")
+    private fun createAudioRecord(): AudioRecord? {
+        if (!hasMicrophonePermission(this)) return null
+        val minBuf = AudioRecord.getMinBufferSize(
+            OpenWakeWordEngine.SAMPLE_RATE_HZ,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        ).coerceAtLeast(OpenWakeWordEngine.CHUNK_SAMPLES * 2)
+        val bufferSize = maxOf(minBuf * 2, OpenWakeWordEngine.CHUNK_SAMPLES * 4)
+
+        val sources = intArrayOf(
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            MediaRecorder.AudioSource.MIC
         )
-
-        runCatching {
-            recognizer.startListening(intent)
-        }.onFailure { err ->
-            Log.w(TAG, "Standby startListening failed: ${err.message}")
-            if (shouldBeListening) {
-                scheduleStandbyStart(delayMs = 2_000L)
+        for (source in sources) {
+            val rec = runCatching {
+                AudioRecord(
+                    source,
+                    OpenWakeWordEngine.SAMPLE_RATE_HZ,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    bufferSize
+                )
+            }.getOrNull()
+            if (rec != null && rec.state == AudioRecord.STATE_INITIALIZED) {
+                return rec
             }
-        }
-    }
-
-    private fun handlePartialTranscript(token: Long, text: String) {
-        val parsed = WakeWordDetector.parse(text)
-        if (!parsed.matched) return
-
-        pendingOneShotCommand = parsed.trailingCommand
-        cancelPendingWake()
-
-        // Standalone "Jarvis" pops up rapidly (~320ms); if user keeps talking ("Jarvis öffne WhatsApp"),
-        // wait briefly for the trailing phrase to complete so we capture the full one-shot command.
-        val waitMs = if (parsed.trailingCommand.isBlank()) 320L else 1_150L
-        val wakeTask = Runnable {
-            pendingWakeRunnable = null
-            if (token != activeSessionToken || wakeTriggeredInCurrentSession) return@Runnable
-            triggerWakePopup(pendingOneShotCommand)
-        }
-        pendingWakeRunnable = wakeTask
-        mainHandler.postDelayed(wakeTask, waitMs)
-    }
-
-    private fun handleFinalTranscript(token: Long, text: String, keepAlive: Boolean) {
-        if (wakeTriggeredInCurrentSession) return
-        val parsed = WakeWordDetector.parse(text)
-        if (parsed.matched) {
-            cancelPendingWake()
-            triggerWakePopup(parsed.trailingCommand)
-            return
-        }
-        if (pendingWakeRunnable != null) {
-            val cmd = pendingOneShotCommand
-            cancelPendingWake()
-            triggerWakePopup(cmd)
-            return
-        }
-        if (!keepAlive && shouldBeListening) {
-            scheduleStandbyStart(delayMs = 320L)
-        }
-    }
-
-    private fun triggerWakePopup(trailingCommand: String) {
-        val now = System.currentTimeMillis()
-        if (now - lastTriggerMs < 1_800L) return
-        lastTriggerMs = now
-        wakeTriggeredInCurrentSession = true
-        shouldBeListening = false
-
-        val hint = detectedLangHint
-        val cleanCmd = trailingCommand.trim()
-        Log.i(TAG, "Wake word 'Jarvis' detected! trailing='${cleanCmd.take(40)}' langHint=$hint")
-
-        // Release standby microphone BEFORE popping up the assistant overlay to prevent mic contention
-        stopStandbyRecognizer()
-
-        mainHandler.postDelayed({
-            JarvisVoiceInteractionService.triggerAssistantPopup(
-                context = applicationContext,
-                initialCommand = cleanCmd.takeIf { it.isNotBlank() },
-                languageHint = hint
-            )
-        }, 110L)
-    }
-
-    private fun stopStandbyRecognizer() {
-        activeSessionToken++
-        pendingRestartRunnable?.let { mainHandler.removeCallbacks(it) }
-        pendingRestartRunnable = null
-        cancelPendingWake()
-        destroyStandbyRecognizerQuietly()
-    }
-
-    private fun cancelPendingWake() {
-        pendingWakeRunnable?.let { mainHandler.removeCallbacks(it) }
-        pendingWakeRunnable = null
-    }
-
-    private fun destroyStandbyRecognizerQuietly() {
-        val current = standbyRecognizer
-        standbyRecognizer = null
-        if (current != null) {
-            runCatching { current.cancel() }
-            runCatching { current.destroy() }
-        }
-    }
-
-    private fun createStandbyRecognizer(useOnDevice: Boolean): SpeechRecognizer? {
-        if (useOnDevice && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            SpeechRecognizer.isOnDeviceRecognitionAvailable(this)
-        ) {
-            return runCatching { SpeechRecognizer.createOnDeviceSpeechRecognizer(this) }.getOrNull()
-        }
-        if (SpeechRecognizer.isRecognitionAvailable(this)) {
-            val external = findExternalRecognitionComponent()
-            if (external != null) {
-                return runCatching { SpeechRecognizer.createSpeechRecognizer(this, external) }.getOrNull()
-            }
-            return runCatching { SpeechRecognizer.createSpeechRecognizer(this) }.getOrNull()
+            rec?.release()
         }
         return null
     }
 
-    private fun findExternalRecognitionComponent(): ComponentName? = runCatching {
-        val intent = Intent(RecognitionService.SERVICE_INTERFACE)
-        val services = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            packageManager.queryIntentServices(intent, PackageManager.ResolveInfoFlags.of(0))
-        } else {
-            @Suppress("DEPRECATION")
-            packageManager.queryIntentServices(intent, 0)
+    private fun readFullChunk(recorder: AudioRecord, dest: ShortArray): Int {
+        var offset = 0
+        while (offset < dest.size) {
+            val n = recorder.read(dest, offset, dest.size - offset, AudioRecord.READ_BLOCKING)
+            if (n < 0) return n
+            if (n == 0) return offset
+            offset += n
         }
-        val candidates = services.mapNotNull { it.serviceInfo }.filter { it.packageName != packageName }
-        // Prefer GoogleTTSRecognitionService (supports both EN + DE cleanly), fall back to Google QuickSearchBox or AiAi
-        val preferred = candidates.firstOrNull { it.packageName == "com.google.android.tts" }
-            ?: candidates.firstOrNull { it.packageName == "com.google.android.googlequicksearchbox" }
-            ?: candidates.firstOrNull { it.packageName == "com.google.android.as" }
-            ?: candidates.firstOrNull()
-        preferred?.let { ComponentName(it.packageName, it.name) }
-    }.getOrNull()
+        return offset
+    }
+
+    private fun releaseRecorderQuietly(recorder: AudioRecord) {
+        runCatching {
+            if (recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                recorder.stop()
+            }
+        }
+        runCatching { recorder.release() }
+    }
 
     private fun isPhoneCallActive(): Boolean = runCatching {
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
@@ -491,7 +346,7 @@ class JarvisWakeWordService : Service() {
             "Jarvis Wake Word",
             NotificationManager.IMPORTANCE_MIN
         ).apply {
-            description = "Keeps hands-free 'Jarvis' wake-word detection active"
+            description = "On-device 'Hey Jarvis' wake-word detection (zero cloud audio)"
             setShowBadge(false)
             setSound(null, null)
             enableVibration(false)
@@ -516,7 +371,7 @@ class JarvisWakeWordService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_jarvis_tile)
             .setContentTitle("Jarvis ready")
-            .setContentText("Say \"Jarvis\" to wake (EN / DE)")
+            .setContentText("On-device wake word · Say \"Hey Jarvis\"")
             .setOngoing(true)
             .setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_MIN)
@@ -530,6 +385,9 @@ class JarvisWakeWordService : Service() {
         private const val TAG = "JarvisWakeWord"
         private const val CHANNEL_ID = "jarvis_wake_word_standby"
         private const val NOTIFICATION_ID = 4207
+        private const val DETECTION_THRESHOLD = 0.38f
+        private const val STRONG_THRESHOLD = 0.50f
+        private const val TRIGGER_COOLDOWN_MS = 2_000L
         const val ACTION_PAUSE = "com.jarvis.assistant.ACTION_PAUSE_WAKE_WORD"
 
         private val _isRunning = MutableStateFlow(false)

@@ -7,12 +7,16 @@ import android.util.Log
 import com.jarvis.assistant.JarvisApplication
 import com.jarvis.assistant.agent.JarvisState
 import com.jarvis.assistant.agent.SafetyMode
+import com.jarvis.assistant.agent.SpokenLanguage
 import com.jarvis.assistant.assist.AmbientPillSnapshot
 import com.jarvis.assistant.services.JarvisAccessibilityService
 import com.jarvis.assistant.services.ScreenTreeSerializer
+import com.jarvis.assistant.voice.GeminiTtsClient
+import com.jarvis.assistant.voice.OpenWakeWordEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Debug-only ADB test harness (never packaged into release APKs).
@@ -118,6 +122,55 @@ class DebugPilotReceiver : BroadcastReceiver() {
                                     Log.i(TAG, "BENCH_TTS_DONE: ${System.currentTimeMillis() - start}ms")
                                 }
                             )
+                        }
+                    }
+
+                    "bench_wakeword" -> {
+                        val app = context.applicationContext as? JarvisApplication
+                        val apiKey = app?.container?.settingsStore?.current()?.geminiApiKey.orEmpty()
+                        withContext(Dispatchers.IO) {
+                            OpenWakeWordEngine.fromAssets(context.applicationContext).use { engine ->
+                                // 1. Test silence false-positive score
+                                var silenceMax = 0f
+                                val silence = ShortArray(OpenWakeWordEngine.CHUNK_SAMPLES)
+                                repeat(30) {
+                                    val sc = engine.processPcm16Chunk(silence)
+                                    if (sc > silenceMax) silenceMax = sc
+                                }
+
+                                // 2. Synthesize real "Hey Jarvis" audio and verify live ONNX detection!
+                                val tts = GeminiTtsClient()
+                                val pcm24 = tts.synthesizeJarvisSpeech(
+                                    apiKey = apiKey,
+                                    text = "Hey Jarvis",
+                                    voiceName = "Charon",
+                                    language = SpokenLanguage.ENGLISH
+                                )
+                                var wakePeak = -1f
+                                var inferenceMsAvg = 0.0
+                                if (pcm24 != null) {
+                                    val pcm16 = OpenWakeWordEngine.resampleLinear(pcm24.samples, pcm24.sampleRateHz, 16_000)
+                                    // Pad 1.5s silence before & 0.8s after so rolling window fills cleanly
+                                    val padded = ShortArray(24_000 + pcm16.size + 12_800)
+                                    System.arraycopy(pcm16, 0, padded, 24_000, pcm16.size)
+                                    engine.reset()
+                                    val t0 = System.nanoTime()
+                                    var frames = 0
+                                    var pos = 0
+                                    while (pos + OpenWakeWordEngine.CHUNK_SAMPLES <= padded.size) {
+                                        val chunk = padded.copyOfRange(pos, pos + OpenWakeWordEngine.CHUNK_SAMPLES)
+                                        val sc = engine.processPcm16Chunk(chunk)
+                                        if (sc > wakePeak) wakePeak = sc
+                                        pos += OpenWakeWordEngine.CHUNK_SAMPLES
+                                        frames++
+                                    }
+                                    inferenceMsAvg = (System.nanoTime() - t0) / 1_000_000.0 / frames.coerceAtLeast(1)
+                                }
+                                Log.i(
+                                    TAG,
+                                    "BENCH_WAKEWORD: silenceMax=${"%.4f".format(silenceMax)} heyJarvisPeak=${"%.4f".format(wakePeak)} avgFrameMs=${"%.2f".format(inferenceMsAvg)}"
+                                )
+                            }
                         }
                     }
 

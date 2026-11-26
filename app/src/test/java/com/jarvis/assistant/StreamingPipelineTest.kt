@@ -96,4 +96,18 @@ class StreamingPipelineTest {
         assertEquals("SIG_STREAM_42", toolResp.toolCalls[0].thoughtSignature)
         assertEquals("WhatsApp", toolResp.toolCalls[0].arguments.getString("app_name"))
     }
+
+    @Test
+    fun gemini38TtsPayloadUsesVerbatimTextAndSpeechMetadata() {
+        val client = com.jarvis.assistant.voice.GeminiTtsClient()
+        val payload38 = client.buildTtsPayload(
+            model = "gemini-3.8-flash-lite-tts",
+            cleanText = "Hello, Sir.",
+            voiceName = "Charon",
+            language = com.jarvis.assistant.agent.SpokenLanguage.ENGLISH
+        )
+        val part38 = payload38.getJSONArray("contents").getJSONObject(0).getJSONArray("parts").getJSONObject(0)
+        assertEquals("Hello, Sir.", part38.getString("text"))
+        assertTrue(part38.getJSONObject("speechMetadata").getString("style").contains("British"))
+    }
 }

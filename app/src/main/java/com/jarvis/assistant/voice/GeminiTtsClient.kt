@@ -48,11 +48,11 @@ class GeminiTtsClient(
             DEFAULT_TTS_MODELS.forEach { if (it !in this) add(it) }
         }
 
-        val payloadStr = buildTtsPayload(cleanText, voiceName, language).toString()
         val startMs = System.currentTimeMillis()
 
         for (model in orderedModels) {
             currentCoroutineContext().ensureActive()
+            val payloadStr = buildTtsPayload(model, cleanText, voiceName, language).toString()
             val url = "${AiProvider.GEMINI.defaultBaseUrl}/models/$model:streamGenerateContent?alt=sse&key=$cleanKey"
             val req = Request.Builder()
                 .url(url)
@@ -127,9 +127,8 @@ class GeminiTtsClient(
             DEFAULT_TTS_MODELS.forEach { if (it !in this) add(it) }
         }
 
-        val payloadStr = buildTtsPayload(cleanText, voiceName, language).toString()
-
         for (model in orderedModels) {
+            val payloadStr = buildTtsPayload(model, cleanText, voiceName, language).toString()
             val url = "${AiProvider.GEMINI.defaultBaseUrl}/models/$model:generateContent?key=$cleanKey"
             val req = Request.Builder()
                 .url(url)
@@ -152,27 +151,41 @@ class GeminiTtsClient(
         null
     }
 
-    private fun buildTtsPayload(
+    internal fun buildTtsPayload(
+        model: String,
         cleanText: String,
         voiceName: String,
         language: SpokenLanguage
     ): JSONObject {
-        val steeredPrompt = when (language) {
-            SpokenLanguage.GERMAN ->
-                "Kultivierter, ruhiger deutscher KI-Butler (J.A.R.V.I.S.), klar und präzise. Lies nur:\n$cleanText"
+        val isGen38Plus = model.startsWith("gemini-3.8", ignoreCase = true) ||
+            model.startsWith("gemini-4", ignoreCase = true)
 
-            SpokenLanguage.ENGLISH ->
-                "Refined British RP male AI butler (J.A.R.V.I.S.), calm and crisp. Read only:\n$cleanText"
+        val partObj = if (isGen38Plus) {
+            // Gemini 3.8 TTS reads inline text prefixes aloud verbatim; pass style via structured speechMetadata
+            val style = when (language) {
+                SpokenLanguage.GERMAN -> "kultiviert, ruhig, vornehmer deutscher KI-Butler, klar und präzise"
+                SpokenLanguage.ENGLISH -> "refined British RP male AI butler, calm, articulate, crisp pacing"
+            }
+            JSONObject()
+                .put("text", cleanText)
+                .put("speechMetadata", JSONObject().put("style", style))
+        } else {
+            val steeredPrompt = when (language) {
+                SpokenLanguage.GERMAN ->
+                    "Kultivierter, ruhiger deutscher KI-Butler (J.A.R.V.I.S.), klar und präzise. Lies nur:\n$cleanText"
+                SpokenLanguage.ENGLISH ->
+                    "Refined British RP male AI butler (J.A.R.V.I.S.), calm and crisp. Read only:\n$cleanText"
+            }
+            JSONObject().put("text", steeredPrompt)
         }
 
         return JSONObject().apply {
             put(
                 "contents",
                 JSONArray().put(
-                    JSONObject().put(
-                        "parts",
-                        JSONArray().put(JSONObject().put("text", steeredPrompt))
-                    )
+                    JSONObject()
+                        .put("role", "user")
+                        .put("parts", JSONArray().put(partObj))
                 )
             )
             put(
@@ -250,9 +263,10 @@ class GeminiTtsClient(
         private const val TAG = "GeminiTts"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
         private val DEFAULT_TTS_MODELS = listOf(
+            "gemini-3.8-flash-lite-tts",
+            "gemini-3.8-flash-tts",
             "gemini-3.1-flash-tts-preview",
-            "gemini-2.5-flash-preview-tts",
-            "gemini-3.8-flash-tts"
+            "gemini-2.5-flash-preview-tts"
         )
 
         fun defaultTtsHttpClient(): OkHttpClient = OkHttpClient.Builder()

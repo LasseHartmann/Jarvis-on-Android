@@ -168,7 +168,7 @@ fun JarvisSettingsScreen(
                     Text(
                         text = if (settings.hasActiveCloudKey() || settings.provider == AiProvider.LOCAL_ONLY) {
                             val wakeHint = if (settings.wakeWordEnabled && telemetry.micGranted) {
-                                "Say \"Jarvis\" or hold power"
+                                "Say \"Hey Jarvis\" or hold power"
                             } else {
                                 "Hold power to wake"
                             }
@@ -248,7 +248,7 @@ fun JarvisSettingsScreen(
                 GroupDivider()
                 ToggleRow(
                     icon = JarvisIcons.Wave,
-                    title = "Say \"Jarvis\" to wake",
+                    title = "Say \"Hey Jarvis\" to wake",
                     checked = settings.wakeWordEnabled,
                     accent = accent,
                     onCheckedChange = { enabled ->
