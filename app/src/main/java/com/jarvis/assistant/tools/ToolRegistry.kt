@@ -36,6 +36,7 @@ class ToolRegistry(
             // App & Web Navigation
             ListInstalledAppsTool(appsRepo),
             OpenAppTool(appsRepo, prepareScreenForPilot),
+            NavigateToTool(context, prepareScreenForPilot),
             OpenUrlTool(context, prepareScreenForPilot),
             WebSearchTool(context, prepareScreenForPilot),
             // Accessibility Screen Pilot

@@ -174,6 +174,22 @@ class DebugPilotReceiver : BroadcastReceiver() {
                         }
                     }
 
+                    "test_nav" -> {
+                        val app = context.applicationContext as? JarvisApplication
+                        val dest = intent.getStringExtra("dest") ?: "Olympiaturm, Munich"
+                        val mode = intent.getStringExtra("mode") ?: "driving"
+                        if (app != null) {
+                            val res = app.container.toolRegistry.execute(
+                                com.jarvis.assistant.agent.ToolCall(
+                                    id = "dbg_nav",
+                                    name = "navigate_to",
+                                    arguments = org.json.JSONObject().put("destination", dest).put("mode", mode)
+                                )
+                            )
+                            Log.i(TAG, "RESULT_TEST_NAV: ok=${res.success} out=${res.output}")
+                        }
+                    }
+
                     else -> Log.w(TAG, "RESULT: unknown action=$action")
                 }
             } finally {

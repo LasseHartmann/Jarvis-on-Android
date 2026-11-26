@@ -73,7 +73,7 @@ class JarvisTaskCoordinator(
     val headlessSpeechActive: StateFlow<Boolean> = _headlessSpeechActive.asStateFlow()
 
     private val exitAfterTools = setOf(
-        "open_app", "open_url", "web_search", "open_system_panel",
+        "open_app", "navigate_to", "open_url", "web_search", "open_system_panel",
         "make_call", "global_action", "tap_element", "tap_coordinates", "type_text", "scroll_screen"
     )
 

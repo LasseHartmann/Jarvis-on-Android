@@ -77,6 +77,7 @@ object AmbientPillStateResolver {
             lower.contains("scroll_screen") -> "Scrolling"
             lower.contains("read_screen") -> "Reading screen"
             lower.contains("global_action") -> "Navigating"
+            lower.contains("navigate_to") -> "Starting Maps"
             lower.contains("open_url") || lower.contains("web_search") -> "Opening web"
             lower.contains("set_volume") || lower.contains("set_ringer") -> "Audio"
             lower.contains("set_brightness") -> "Brightness"

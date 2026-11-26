@@ -83,4 +83,19 @@ class LocalCommandRouterTest {
         val spoken = plan!!.composeReply(listOf(rawToolResult), "Sir")
         assertEquals("Launched WhatsApp (com.whatsapp). At your service, Sir.", spoken)
     }
+
+    @Test
+    fun openUrlPreservesNavigationSchemesAndDetectsMapsLinks() {
+        assertEquals(
+            "google.navigation:q=Olympiaturm",
+            com.jarvis.assistant.tools.OpenUrlTool.normalizeUriString("google.navigation:q=Olympiaturm")
+        )
+        assertEquals(
+            "https://example.com",
+            com.jarvis.assistant.tools.OpenUrlTool.normalizeUriString("example.com")
+        )
+        assertTrue(com.jarvis.assistant.tools.OpenUrlTool.shouldRouteToGoogleMaps("google.navigation:q=Olympiaturm"))
+        assertTrue(com.jarvis.assistant.tools.OpenUrlTool.shouldRouteToGoogleMaps("https://www.google.com/maps/dir/?api=1&destination=Munich"))
+        assertEquals(false, com.jarvis.assistant.tools.OpenUrlTool.shouldRouteToGoogleMaps("https://wikipedia.org"))
+    }
 }

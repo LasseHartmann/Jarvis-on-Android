@@ -112,13 +112,12 @@ class OpenUrlTool(
     override suspend fun execute(args: JSONObject): ToolExecutionOutput {
         val raw = args.optString("url", "").trim()
         if (raw.isBlank()) return ToolExecutionOutput(false, "URL is empty.")
-        val normalized = if (raw.contains("://") || raw.startsWith("geo:") || raw.startsWith("mailto:") || raw.startsWith("tel:")) {
-            raw
-        } else {
-            "https://$raw"
-        }
+        val normalized = normalizeUriString(raw)
         prepareScreenForPilot()
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(normalized)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (shouldRouteToGoogleMaps(normalized) && isPackageInstalled(context, GOOGLE_MAPS_PACKAGE)) {
+            intent.setPackage(GOOGLE_MAPS_PACKAGE)
+        }
         return runCatching {
             context.startActivity(intent)
             ToolExecutionOutput(true, "Opened $normalized.")
@@ -126,7 +125,108 @@ class OpenUrlTool(
             ToolExecutionOutput(false, "Unable to open URL '$normalized': ${err.message}")
         }
     }
+
+    companion object {
+        private val SCHEME_REGEX = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:.*")
+
+        fun normalizeUriString(raw: String): String {
+            val trimmed = raw.trim()
+            return if (SCHEME_REGEX.matches(trimmed)) trimmed else "https://$trimmed"
+        }
+
+        fun shouldRouteToGoogleMaps(uri: String): Boolean {
+            val lower = uri.lowercase()
+            return lower.startsWith("google.navigation:") ||
+                lower.startsWith("geo:") ||
+                lower.contains("maps.google.") ||
+                lower.contains("google.com/maps") ||
+                lower.contains("maps.app.goo.gl")
+        }
+    }
 }
+
+class NavigateToTool(
+    private val context: Context,
+    private val prepareScreenForPilot: suspend () -> Unit = {}
+) : JarvisTool {
+    override val spec = ToolSpec(
+        name = "navigate_to",
+        description = "Start turn-by-turn navigation directly inside Google Maps to a specific place name, landmark, address, or coordinates. Always resolve vague references (e.g. 'tallest building in Munich' -> 'Olympiaturm, Munich') into a concrete destination name/address.",
+        params = listOf(
+            ToolParam("destination", "string", "Concrete destination name, address, or lat,lng (e.g. 'Olympiaturm, Munich').", required = true),
+            ToolParam(
+                "mode",
+                "string",
+                "Travel mode: driving (default), walking, bicycling, or transit.",
+                required = false,
+                enumValues = listOf("driving", "walking", "bicycling", "transit")
+            )
+        ),
+        defaultRisk = RiskLevel.SAFE
+    )
+
+    override suspend fun execute(args: JSONObject): ToolExecutionOutput {
+        val destination = args.optString("destination", "").trim()
+        if (destination.isBlank()) {
+            return ToolExecutionOutput(false, "No destination provided.")
+        }
+        val mode = args.optString("mode", "driving").trim().lowercase().ifBlank { "driving" }
+        val uriString = buildNavigationUri(destination, mode)
+
+        prepareScreenForPilot()
+
+        val mapsInstalled = isPackageInstalled(context, GOOGLE_MAPS_PACKAGE)
+        val primaryIntent = Intent(Intent.ACTION_VIEW, Uri.parse(uriString)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (mapsInstalled) {
+                setPackage(GOOGLE_MAPS_PACKAGE)
+            }
+        }
+
+        val launched = runCatching {
+            context.startActivity(primaryIntent)
+            true
+        }.getOrElse {
+            // Fallback without package pin if another maps app is preferred
+            runCatching {
+                val fallback = Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=${Uri.encode(destination)}"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(fallback)
+                true
+            }.getOrDefault(false)
+        }
+
+        return if (launched) {
+            ToolExecutionOutput(
+                true,
+                "Started $mode navigation in Google Maps to $destination.",
+                JSONObject().put("destination", destination).put("mode", mode).put("uri", uriString)
+            )
+        } else {
+            ToolExecutionOutput(false, "Unable to launch Google Maps navigation to '$destination'.")
+        }
+    }
+
+    companion object {
+        fun buildNavigationUri(destination: String, mode: String = "driving"): String {
+            val encoded = Uri.encode(destination.trim())
+            return when (mode.trim().lowercase()) {
+                "walking", "walk", "foot" -> "google.navigation:q=$encoded&mode=w"
+                "bicycling", "bike", "cycling" -> "google.navigation:q=$encoded&mode=b"
+                "transit", "public_transit", "train", "bus" ->
+                    "https://www.google.com/maps/dir/?api=1&destination=$encoded&travelmode=transit"
+                else -> "google.navigation:q=$encoded&mode=d"
+            }
+        }
+    }
+}
+
+private const val GOOGLE_MAPS_PACKAGE = "com.google.android.apps.maps"
+
+private fun isPackageInstalled(context: Context, packageName: String): Boolean = runCatching {
+    context.packageManager.getPackageInfo(packageName, 0)
+    true
+}.getOrDefault(false)
 
 class WebSearchTool(
     private val context: Context,
