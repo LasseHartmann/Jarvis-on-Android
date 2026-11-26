@@ -11,6 +11,7 @@ import androidx.core.content.ContextCompat
 import com.jarvis.assistant.JarvisAppContainer
 import com.jarvis.assistant.agent.JarvisState
 import com.jarvis.assistant.agent.PendingConfirmation
+import com.jarvis.assistant.agent.SpokenLanguage
 import com.jarvis.assistant.voice.StarkCue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -24,18 +25,20 @@ object VoiceCommandClassifier {
     private val dismissPhrases = setOf(
         "stand down", "dismiss", "never mind", "nevermind", "cancel", "close",
         "sleep", "go to sleep", "power down", "nothing", "forget it", "stop",
-        "shut down", "abbrechen", "schließen", "nichts"
+        "shut down", "abbrechen", "schließen", "schliessen", "nichts",
+        "vergiss es", "lass es", "stopp", "schlafen", "ruhe"
     )
 
     private val approveWords = setOf(
         "confirm", "confirmed", "yes", "yeah", "yep", "authorize", "authorized",
         "approve", "approved", "proceed", "go ahead", "do it", "ok", "okay",
-        "sure", "ja", "bestätigen", "machen"
+        "sure", "ja", "bestätigen", "bestaetigen", "bestätige", "machen",
+        "mach es", "mach weiter", "los", "genau", "alles klar", "einverstanden"
     )
 
     private val denyWords = setOf(
         "cancel", "no", "nope", "deny", "denied", "abort", "stop", "don't",
-        "do not", "never mind", "nein", "abbrechen"
+        "do not", "never mind", "nein", "abbrechen", "stopp", "nicht", "lass es"
     )
 
     fun isDismissCommand(spoken: String): Boolean {
@@ -55,6 +58,9 @@ object VoiceCommandClassifier {
     private fun normalize(raw: String): String =
         raw.trim().lowercase()
             .removePrefix("hey jarvis")
+            .removePrefix("ok jarvis")
+            .removePrefix("okay jarvis")
+            .removePrefix("hallo jarvis")
             .removePrefix("jarvis")
             .trim(',', '.', '!', '?', ' ')
 }
@@ -72,7 +78,7 @@ class JarvisAssistController(
     private var awaitingVoiceConfirm = false
     private var isFollowUpTurn = false
 
-    fun startSession() {
+    fun startSession(initialCommand: String? = null, languageHint: String? = null) {
         visible = true
         awaitingVoiceConfirm = false
         isFollowUpTurn = false
@@ -90,10 +96,16 @@ class JarvisAssistController(
 
         bindReactiveFlows()
 
+        if (!initialCommand.isNullOrBlank()) {
+            overlayView.updateState(JarvisState.THINKING, "Thinking", initialCommand, "")
+            container.taskCoordinator.submitSpokenDirective(initialCommand, languageHint)
+            return
+        }
+
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             val msg = "Microphone access is required, ${settings.userTitle}. Open Jarvis settings to enable it."
             overlayView.updateState(JarvisState.ERROR, "Microphone needed", msg, "Tap anywhere to close")
-            speakAndMaybeDismiss(msg, forceDismiss = true)
+            speakAndMaybeDismiss(msg, forceDismiss = true, replyLanguage = SpokenLanguage.ENGLISH)
             return
         }
 
@@ -125,10 +137,14 @@ class JarvisAssistController(
         onDismissImmediate()
     }
 
-    override fun onDirectiveReplyReady(reply: String, shouldExitImmediately: Boolean) {
+    override fun onDirectiveReplyReady(
+        reply: String,
+        shouldExitImmediately: Boolean,
+        replyLanguage: SpokenLanguage
+    ) {
         if (!visible) return
         overlayView.updateState(JarvisState.SPEAKING, "Jarvis", reply, "")
-        speakAndMaybeDismiss(reply, forceDismiss = shouldExitImmediately)
+        speakAndMaybeDismiss(reply, forceDismiss = shouldExitImmediately, replyLanguage = replyLanguage)
     }
 
     override fun onDirectiveAborted() {
@@ -136,27 +152,29 @@ class JarvisAssistController(
         dismissOverlayGracefully()
     }
 
-    override fun onVoiceConfirmationPrompt(pending: PendingConfirmation) {
+    override fun onVoiceConfirmationPrompt(pending: PendingConfirmation, language: SpokenLanguage) {
         if (!visible) return
         awaitingVoiceConfirm = true
         triggerWakeHaptic()
 
         val settings = container.settingsStore.current()
+        val hintText = if (language == SpokenLanguage.GERMAN) "Sag Ja oder Abbrechen" else "Say confirm or cancel"
         overlayView.updateState(
             JarvisState.AWAITING_AUTH,
-            "Confirmation",
+            if (language == SpokenLanguage.GERMAN) "Bestätigung" else "Confirmation",
             pending.detail,
-            "Say confirm or cancel"
+            hintText
         )
 
-        val promptSpeech = container.taskCoordinator.buildConfirmationPrompt(pending, settings.userTitle)
+        val promptSpeech = container.taskCoordinator.buildConfirmationPrompt(pending, settings.userTitle, language)
         container.voiceEngine.speak(
             text = promptSpeech,
-            options = container.taskCoordinator.buildSpeechOptions(settings, instantLocal = true),
+            options = container.taskCoordinator.buildSpeechOptions(settings, instantLocal = true, language = language),
             onFinished = {
                 if (!visible || container.orchestrator.pendingConfirmation.value == null) return@speak
                 container.soundEffects.play(StarkCue.WAKE)
                 container.voiceEngine.startListening(
+                    languageMode = settings.languageMode,
                     onFinalResult = { spoken ->
                         awaitingVoiceConfirm = false
                         val decision = VoiceCommandClassifier.parseConfirmation(spoken) ?: false
@@ -216,22 +234,30 @@ class JarvisAssistController(
         isFollowUpTurn = isFollowUp
         awaitingVoiceConfirm = false
 
-        val title = container.settingsStore.current().userTitle
+        val settings = container.settingsStore.current()
+        val title = settings.userTitle
+        val deFollowUp = container.taskCoordinator.lastSpokenLanguage == SpokenLanguage.GERMAN
         overlayView.updateState(
             JarvisState.LISTENING,
             "Listening",
-            if (isFollowUp) "Anything else, $title?" else "",
+            if (isFollowUp) {
+                if (deFollowUp) "Noch etwas, $title?" else "Anything else, $title?"
+            } else "",
             ""
         )
 
         container.voiceEngine.startListening(
+            languageMode = settings.languageMode,
             onFinalResult = { spoken ->
                 if (!visible) return@startListening
                 if (VoiceCommandClassifier.isDismissCommand(spoken)) {
                     dismissAndAbort()
                 } else {
                     overlayView.updateState(JarvisState.THINKING, "Thinking", spoken, "")
-                    container.taskCoordinator.submitSpokenDirective(spoken)
+                    container.taskCoordinator.submitSpokenDirective(
+                        spoken = spoken,
+                        detectedLanguageHint = container.voiceEngine.lastDetectedLanguageTag
+                    )
                 }
             },
             onError = { errMsg ->
@@ -251,7 +277,11 @@ class JarvisAssistController(
         )
     }
 
-    private fun speakAndMaybeDismiss(text: String, forceDismiss: Boolean) {
+    private fun speakAndMaybeDismiss(
+        text: String,
+        forceDismiss: Boolean,
+        replyLanguage: SpokenLanguage
+    ) {
         val settings = container.settingsStore.current()
         val afterSpeak = {
             if (visible) {
@@ -272,7 +302,7 @@ class JarvisAssistController(
         if (settings.ttsEnabled) {
             container.voiceEngine.speak(
                 text = text,
-                options = container.taskCoordinator.buildSpeechOptions(settings),
+                options = container.taskCoordinator.buildSpeechOptions(settings, language = replyLanguage),
                 onFinished = afterSpeak
             )
         } else {

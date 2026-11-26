@@ -9,7 +9,8 @@ object JarvisPersona {
     fun buildSystemPrompt(
         settings: JarvisSettings,
         telemetryContext: String,
-        memories: List<JarvisMemory>
+        memories: List<JarvisMemory>,
+        replyLanguage: SpokenLanguage = SpokenLanguage.ENGLISH
     ): String {
         val nowStr = SimpleDateFormat("EEEE, yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
         val title = settings.userTitle.ifBlank { "Sir" }
@@ -39,8 +40,38 @@ object JarvisPersona {
             memories.take(15).joinToString("\n") { "- [${it.category}] ${it.key}: ${it.content}" }
         }
 
+        val languageRule = when (settings.languageMode) {
+            JarvisLanguageMode.BILINGUAL_EN_DE -> {
+                val turnHint = if (replyLanguage == SpokenLanguage.GERMAN) {
+                    "German (Deutsch)"
+                } else {
+                    "English"
+                }
+                """
+                ## Bilingual Language Protocol (English + Deutsch)
+                - You are natively fluent in both English and German.
+                - ALWAYS reply in the exact language the user spoke in their latest request (detected for this turn: $turnHint).
+                - When replying in English, use refined British J.A.R.V.I.S. diction.
+                - When replying in German, speak natural, cultured, composed German inspired by the German J.A.R.V.I.S. cinema voice (address the user naturally as "$title" when fitting).
+                - Only switch languages if the user explicitly asks you to translate or reply in the other language.
+                """.trimIndent()
+            }
+
+            JarvisLanguageMode.GERMAN_ONLY -> """
+                ## Sprachprotokoll (Deutsch)
+                - Antworte immer auf kultiviertem, präzisem Deutsch im Stil von J.A.R.V.I.S. (sprich den Nutzer natürlich mit "$title" an).
+            """.trimIndent()
+
+            JarvisLanguageMode.ENGLISH_ONLY -> """
+                ## Language Protocol
+                - Always respond in refined British English.
+            """.trimIndent()
+        }
+
         return buildString {
             appendLine(styleBlock)
+            appendLine()
+            appendLine(languageRule)
             appendLine()
             appendLine("## Current Device Context")
             appendLine("Local Time: $nowStr")

@@ -3,6 +3,7 @@ package com.jarvis.assistant.voice
 import android.util.Base64
 import com.jarvis.assistant.agent.AiProvider
 import com.jarvis.assistant.agent.GeminiLlmClient
+import com.jarvis.assistant.agent.SpokenLanguage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -26,7 +27,8 @@ class GeminiTtsClient(
     suspend fun synthesizeJarvisSpeech(
         apiKey: String,
         text: String,
-        voiceName: String = "Charon"
+        voiceName: String = "Charon",
+        language: SpokenLanguage = SpokenLanguage.ENGLISH
     ): DecodedPcm? = withContext(Dispatchers.IO) {
         val cleanKey = apiKey.trim()
         val cleanText = text.trim()
@@ -37,7 +39,13 @@ class GeminiTtsClient(
             DEFAULT_TTS_MODELS.forEach { if (it !in this) add(it) }
         }
 
-        val steeredPrompt = "Speak the following line in a cultured, calm, refined upper-class British Received Pronunciation male accent inspired by Iron Man's J.A.R.V.I.S. AI butler — articulate, composed, dryly witty, crisp pacing. Read ONLY the exact words below:\n\n$cleanText"
+        val steeredPrompt = when (language) {
+            SpokenLanguage.GERMAN ->
+                "Sprich die folgende Zeile in einer kultivierten, ruhigen, vornehmen deutschen männlichen Stimme im Stil von Iron Mans J.A.R.V.I.S. — klar artikuliert, gelassen, souverän, präzises Tempo. Lies NUR die exakt folgenden Worte vor:\n\n$cleanText"
+
+            SpokenLanguage.ENGLISH ->
+                "Speak the following line in a cultured, calm, refined upper-class British Received Pronunciation male accent inspired by Iron Man's J.A.R.V.I.S. AI butler — articulate, composed, dryly witty, crisp pacing. Read ONLY the exact words below:\n\n$cleanText"
+        }
 
         val payload = JSONObject().apply {
             put(

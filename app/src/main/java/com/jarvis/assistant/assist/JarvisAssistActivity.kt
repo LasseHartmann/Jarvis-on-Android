@@ -8,6 +8,7 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.core.view.WindowCompat
 import com.jarvis.assistant.JarvisApplication
+import com.jarvis.assistant.services.JarvisVoiceInteractionService
 
 /**
  * Pure voice-only translucent minimalist wake overlay activity.
@@ -68,7 +69,9 @@ class JarvisAssistActivity : ComponentActivity() {
             }
         )
         controller = ctrl
-        ctrl.startSession()
+        val initialCommand = intent?.getStringExtra(JarvisVoiceInteractionService.EXTRA_INITIAL_COMMAND)
+        val langHint = intent?.getStringExtra(JarvisVoiceInteractionService.EXTRA_LANGUAGE_HINT)
+        ctrl.startSession(initialCommand = initialCommand, languageHint = langHint)
     }
 
     private fun applyFrostedBlur(enabled: Boolean) {

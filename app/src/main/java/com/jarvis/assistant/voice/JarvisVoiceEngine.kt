@@ -11,13 +11,18 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.speech.ModelDownloadListener
 import android.speech.RecognitionListener
 import android.speech.RecognitionService
+import android.speech.RecognitionSupport
+import android.speech.RecognitionSupportCallback
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
+import com.jarvis.assistant.agent.JarvisLanguageMode
+import com.jarvis.assistant.agent.SpokenLanguage
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,7 +47,8 @@ data class JarvisSpeechOptions(
     val intercomDspEnabled: Boolean = true,
     val speechRate: Float = 1.03f,
     val pitch: Float = 0.88f,
-    val preferInstantLocal: Boolean = false
+    val preferInstantLocal: Boolean = false,
+    val language: SpokenLanguage = SpokenLanguage.ENGLISH
 )
 
 class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
@@ -74,6 +80,10 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
     private val _partialTranscript = MutableStateFlow("")
     val partialTranscript: StateFlow<String> = _partialTranscript.asStateFlow()
 
+    @Volatile
+    var lastDetectedLanguageTag: String? = null
+        private set
+
     private var onFinalResultCallback: ((String) -> Unit)? = null
     private var onErrorCallback: ((String) -> Unit)? = null
     private var onDirectTtsFinishedCallback: (() -> Unit)? = null
@@ -87,7 +97,7 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
             ttsReady = true
-            configureBritishMaleVoice()
+            configureVoiceForLanguage(SpokenLanguage.ENGLISH)
             tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {
                     if (utteranceId?.startsWith("synth_") != true) {
@@ -122,37 +132,52 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
     }
 
     /**
-     * Strictly prioritizes authentic British English (en-GB) MALE voices
-     * (Google TTS: gbd = deep British male, rjs = crisp BBC British male, gbb = warm British male)
-     * rather than falling back to female defaults.
+     * Selects the highest-quality male voice for English (en-GB: gbd/rjs/gbb) or
+     * German (de-DE: deb/ded/deg male voices) so J.A.R.V.I.S. keeps a refined male timbre in both languages.
      */
-    private fun configureBritishMaleVoice() {
+    private fun configureVoiceForLanguage(language: SpokenLanguage) {
         val engine = tts ?: return
-        val gbRes = engine.setLanguage(Locale.UK)
-        if (gbRes == TextToSpeech.LANG_MISSING_DATA || gbRes == TextToSpeech.LANG_NOT_SUPPORTED) {
-            engine.setLanguage(Locale.US)
+        val targetLocale = language.locale
+        val res = engine.setLanguage(targetLocale)
+        if (res == TextToSpeech.LANG_MISSING_DATA || res == TextToSpeech.LANG_NOT_SUPPORTED) {
+            if (language == SpokenLanguage.ENGLISH) {
+                engine.setLanguage(Locale.US)
+            }
         }
         runCatching {
             val voices = engine.voices.orEmpty()
+            val langCode = targetLocale.language
+            val countryCode = targetLocale.country
             val best = voices
-                .filter { it.locale.language.equals("en", ignoreCase = true) }
+                .filter { it.locale.language.equals(langCode, ignoreCase = true) }
                 .maxByOrNull { v ->
-                    val name = v.name.lowercase()
+                    val name = v.name.lowercase(Locale.ROOT)
                     var score = 0
-                    val isGb = v.locale.country.equals("GB", ignoreCase = true)
-                    if (isGb) score += 200
-                    // Google TTS British Male voice IDs: gbd (deep refined), rjs (classic RP), gbb (warm)
-                    when {
-                        name.contains("-gbd") -> score += 160
-                        name.contains("-rjs") -> score += 150
-                        name.contains("-gbb") -> score += 140
-                        name.contains("male") && !name.contains("female") -> score += 110
+                    if (v.locale.country.equals(countryCode, ignoreCase = true)) score += 200
+
+                    if (language == SpokenLanguage.ENGLISH) {
+                        when {
+                            name.contains("-gbd") -> score += 160
+                            name.contains("-rjs") -> score += 150
+                            name.contains("-gbb") -> score += 140
+                            name.contains("male") && !name.contains("female") -> score += 110
+                        }
+                        if (name.contains("-gba") || name.contains("-gbc") || name.contains("-gbg") || name.contains("female")) {
+                            score -= 120
+                        }
+                    } else {
+                        // Google TTS German male voice IDs: deb, ded, deg
+                        when {
+                            name.contains("-deb") -> score += 160
+                            name.contains("-ded") -> score += 150
+                            name.contains("-deg") -> score += 140
+                            name.contains("male") && !name.contains("female") -> score += 110
+                        }
+                        if (name.contains("-dea") || name.contains("-dec") || name.contains("-dee") || name.contains("-def") || name.contains("female")) {
+                            score -= 120
+                        }
                     }
-                    // Explicitly penalize known Google female IDs so J.A.R.V.I.S. stays male!
-                    if (name.contains("-gba") || name.contains("-gbc") || name.contains("-gbg") || name.contains("female")) {
-                        score -= 120
-                    }
-                    // Slight bonus for offline local voice for zero latency
+
                     if (!v.isNetworkConnectionRequired) score += 25
                     if (name.contains("local") || name.contains("network")) score += 10
                     score
@@ -185,13 +210,14 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
                     pcm = geminiTtsClient.synthesizeJarvisSpeech(
                         apiKey = options.geminiApiKey,
                         text = clean,
-                        voiceName = options.neuralVoiceName
+                        voiceName = options.neuralVoiceName,
+                        language = options.language
                     )
                 }
 
-                // Tier 2: Offline British Male Android TTS synthesized into WAV + Stark Helmet Intercom DSP
+                // Tier 2: Offline Male Android TTS synthesized into WAV + Stark Helmet Intercom DSP
                 if (!options.preferInstantLocal && pcm == null && ttsReady && options.intercomDspEnabled) {
-                    pcm = synthesizeOfflineTtsToPcm(clean, options.speechRate, options.pitch)
+                    pcm = synthesizeOfflineTtsToPcm(clean, options.speechRate, options.pitch, options.language)
                 }
 
                 if (pcm != null && pcm.samples.isNotEmpty()) {
@@ -206,11 +232,11 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
                     return@launch
                 }
 
-                // Tier 3: Direct Android British Male TTS fallback
+                // Tier 3: Direct Android Male TTS fallback (EN-GB or DE-DE)
                 if (ttsReady) {
                     onDirectTtsFinishedCallback = onFinished
                     withContext(Dispatchers.Main) {
-                        configureBritishMaleVoice()
+                        configureVoiceForLanguage(options.language)
                         tts?.setSpeechRate(options.speechRate.coerceIn(0.6f, 1.6f))
                         tts?.setPitch(options.pitch.coerceIn(0.6f, 1.4f))
                         val id = "jarvis_${UUID.randomUUID().toString().take(8)}"
@@ -230,7 +256,8 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
     private suspend fun synthesizeOfflineTtsToPcm(
         cleanText: String,
         speechRate: Float,
-        pitch: Float
+        pitch: Float,
+        language: SpokenLanguage
     ): DecodedPcm? {
         val engine = tts ?: return null
         val outFile = File(appContext.cacheDir, "jarvis_tts_${UUID.randomUUID().toString().take(8)}.wav")
@@ -239,7 +266,7 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
         synthesisWaiters[uttId] = waiter
 
         val queued = withContext(Dispatchers.Main) {
-            configureBritishMaleVoice()
+            configureVoiceForLanguage(language)
             engine.setSpeechRate(speechRate.coerceIn(0.6f, 1.6f))
             engine.setPitch(pitch.coerceIn(0.6f, 1.4f))
             engine.synthesizeToFile(cleanText, Bundle(), outFile, uttId) == TextToSpeech.SUCCESS
@@ -325,13 +352,79 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
         }
     }
 
+    /**
+     * Proactively triggers offline speech model downloads for English (en-US) and German (de-DE)
+     * on Android 13+ so on-device bilingual recognition and wake-word switching work seamlessly.
+     */
+    fun ensureBilingualOfflineModels() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext)) return
+        mainHandler.post {
+            runCatching {
+                val probe = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
+                val probeIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                }
+                probe.checkRecognitionSupport(
+                    probeIntent,
+                    appContext.mainExecutor,
+                    object : RecognitionSupportCallback {
+                        override fun onSupportResult(recognitionSupport: RecognitionSupport) {
+                            val installed = recognitionSupport.installedOnDeviceLanguages.map { it.lowercase(Locale.ROOT) }.toSet()
+                            val supported = recognitionSupport.supportedOnDeviceLanguages.map { it.lowercase(Locale.ROOT) }.toSet()
+                            val needed = listOf("en-US", "de-DE").filter { tag ->
+                                val lower = tag.lowercase(Locale.ROOT)
+                                lower !in installed && lower in supported
+                            }
+                            for (tag in needed) {
+                                Log.i(TAG, "Requesting offline speech pack download for $tag")
+                                val dlIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, tag)
+                                }
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                                    runCatching {
+                                        probe.triggerModelDownload(
+                                            dlIntent,
+                                            appContext.mainExecutor,
+                                            object : ModelDownloadListener {
+                                                override fun onProgress(completedPercent: Int) = Unit
+                                                override fun onSuccess() {
+                                                    Log.i(TAG, "Offline speech model ready: $tag")
+                                                }
+                                                override fun onScheduled() {
+                                                    Log.i(TAG, "Offline speech model download scheduled: $tag")
+                                                }
+                                                override fun onError(error: Int) {
+                                                    Log.w(TAG, "Offline speech model download error ($error) for $tag")
+                                                }
+                                            }
+                                        )
+                                    }
+                                } else {
+                                    runCatching { probe.triggerModelDownload(dlIntent) }
+                                }
+                            }
+                            runCatching { probe.destroy() }
+                        }
+
+                        override fun onError(error: Int) {
+                            runCatching { probe.destroy() }
+                        }
+                    }
+                )
+            }
+        }
+    }
+
     fun startListening(
+        languageMode: JarvisLanguageMode = JarvisLanguageMode.BILINGUAL_EN_DE,
         onFinalResult: (String) -> Unit,
         onError: (String) -> Unit
     ) {
         stopSpeaking()
         onFinalResultCallback = onFinalResult
         onErrorCallback = onError
+        lastDetectedLanguageTag = null
 
         mainHandler.post {
             pendingStartRunnable?.let { mainHandler.removeCallbacks(it) }
@@ -347,6 +440,8 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
                 startRecognizerAttempt(
                     token = token,
                     useOnDevice = preferOnDevice,
+                    languageMode = languageMode,
+                    enableLanguageSwitch = languageMode == JarvisLanguageMode.BILINGUAL_EN_DE,
                     attempt = 0
                 )
             }
@@ -363,6 +458,8 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
     private fun startRecognizerAttempt(
         token: Long,
         useOnDevice: Boolean,
+        languageMode: JarvisLanguageMode,
+        enableLanguageSwitch: Boolean,
         attempt: Int
     ) {
         if (token != activeListenToken) return
@@ -375,7 +472,7 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
         }
 
         speechRecognizer = recognizer
-        Log.i(TAG, "Starting SpeechRecognizer (onDevice=$useOnDevice, attempt=$attempt)")
+        Log.i(TAG, "Starting SpeechRecognizer (onDevice=$useOnDevice, mode=$languageMode, langSwitch=$enableLanguageSwitch, attempt=$attempt)")
 
         recognizer.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {
@@ -398,11 +495,22 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
                 _rmsLevel.value = 0f
             }
 
+            override fun onLanguageDetection(results: Bundle) {
+                if (token != activeListenToken) return
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    val detected = results.getString(SpeechRecognizer.DETECTED_LANGUAGE)
+                    if (!detected.isNullOrBlank()) {
+                        lastDetectedLanguageTag = detected
+                        Log.i(TAG, "Detected spoken language: $detected")
+                    }
+                }
+            }
+
             override fun onError(error: Int) {
                 if (token != activeListenToken) return
-                Log.w(TAG, "SpeechRecognizer error=$error (onDevice=$useOnDevice, attempt=$attempt)")
+                Log.w(TAG, "SpeechRecognizer error=$error (onDevice=$useOnDevice, langSwitch=$enableLanguageSwitch, attempt=$attempt)")
 
-                // Automatically recover from transient Android 13-15 binder/server disconnects & language pack gaps
+                // Automatically recover from transient Android 13-15 binder/server disconnects & missing language packs
                 val recoverableErrors = setOf(
                     SpeechRecognizer.ERROR_SERVER_DISCONNECTED, // 11
                     SpeechRecognizer.ERROR_CLIENT,              // 5
@@ -412,11 +520,15 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
                 )
                 if (error in recoverableErrors && attempt < 2) {
                     destroyRecognizerQuietly()
+                    val isLangPackError = error == 12 || error == 13
                     val nextOnDevice = if (attempt == 0) !useOnDevice else false
+                    val nextLangSwitch = if (isLangPackError && attempt >= 1) false else enableLanguageSwitch
                     val retryTask = Runnable {
                         startRecognizerAttempt(
                             token = token,
                             useOnDevice = nextOnDevice,
+                            languageMode = languageMode,
+                            enableLanguageSwitch = nextLangSwitch,
                             attempt = attempt + 1
                         )
                     }
@@ -468,13 +580,12 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
             override fun onEvent(eventType: Int, params: Bundle?) = Unit
         })
 
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-            putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, appContext.packageName)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1300L)
-        }
+        val intent = buildSpeechIntent(
+            callingPackage = appContext.packageName,
+            languageMode = languageMode,
+            enableLanguageSwitch = enableLanguageSwitch,
+            completeSilenceMs = 1_300L
+        )
         _isListening.value = true
         runCatching {
             recognizer.startListening(intent)
@@ -563,5 +674,55 @@ class JarvisVoiceEngine(context: Context) : TextToSpeech.OnInitListener {
 
     companion object {
         private const val TAG = "JarvisVoice"
+
+        fun buildSpeechIntent(
+            callingPackage: String,
+            languageMode: JarvisLanguageMode,
+            enableLanguageSwitch: Boolean,
+            completeSilenceMs: Long = 1_300L,
+            segmentedSession: Boolean = false
+        ): Intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, callingPackage)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, completeSilenceMs)
+
+            when (languageMode) {
+                JarvisLanguageMode.ENGLISH_ONLY -> {
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
+                }
+
+                JarvisLanguageMode.GERMAN_ONLY -> {
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "de-DE")
+                }
+
+                JarvisLanguageMode.BILINGUAL_EN_DE -> {
+                    val primary = if (Locale.getDefault().language.equals("de", ignoreCase = true)) {
+                        "de-DE"
+                    } else {
+                        "en-US"
+                    }
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, primary)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && enableLanguageSwitch) {
+                        val allowed = arrayListOf("en-US", "de-DE")
+                        putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true)
+                        putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES, allowed)
+                        putExtra(
+                            RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH,
+                            RecognizerIntent.LANGUAGE_SWITCH_QUICK_RESPONSE
+                        )
+                        putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES, allowed)
+                    }
+                }
+            }
+
+            if (segmentedSession && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                putExtra(
+                    RecognizerIntent.EXTRA_SEGMENTED_SESSION,
+                    RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS
+                )
+            }
+        }
     }
 }

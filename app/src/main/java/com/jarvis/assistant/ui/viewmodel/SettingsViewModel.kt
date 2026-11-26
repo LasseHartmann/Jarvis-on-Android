@@ -5,9 +5,12 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jarvis.assistant.JarvisApplication
 import com.jarvis.assistant.agent.AuditLogEntry
+import com.jarvis.assistant.agent.JarvisLanguageMode
 import com.jarvis.assistant.agent.JarvisMemory
 import com.jarvis.assistant.agent.JarvisSettings
+import com.jarvis.assistant.agent.SpokenLanguage
 import com.jarvis.assistant.device.DeviceTelemetry
+import com.jarvis.assistant.services.JarvisWakeWordService
 import com.jarvis.assistant.voice.JarvisSpeechOptions
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
@@ -34,23 +37,39 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun refreshTelemetry() {
         container.telemetryMonitor.refresh()
+        syncWakeWordService()
+    }
+
+    fun syncWakeWordService() {
+        JarvisWakeWordService.syncWithSettings(getApplication(), container.settingsStore.current())
     }
 
     fun updateSettings(transform: (JarvisSettings) -> JarvisSettings) {
         container.settingsStore.update(transform)
+        syncWakeWordService()
     }
 
-    fun testVoiceSample() {
+    fun testVoiceSample(languageOverride: SpokenLanguage? = null) {
         val s = container.settingsStore.current()
+        val lang = languageOverride ?: when (s.languageMode) {
+            JarvisLanguageMode.GERMAN_ONLY -> SpokenLanguage.GERMAN
+            else -> SpokenLanguage.ENGLISH
+        }
+        val sampleText = if (lang == SpokenLanguage.GERMAN) {
+            "J.A.R.V.I.S. ist online und zu Ihren Diensten, ${s.userTitle}. Alle Systeme laufen einwandfrei."
+        } else {
+            "J.A.R.V.I.S. online and at your service, ${s.userTitle}. All Xiaomi 15T Pro systems are operational."
+        }
         container.voiceEngine.speak(
-            text = "J.A.R.V.I.S. online and at your service, ${s.userTitle}. All Xiaomi 15T Pro systems are operational.",
+            text = sampleText,
             options = JarvisSpeechOptions(
                 geminiApiKey = s.geminiApiKey,
                 neuralVoiceEnabled = s.neuralJarvisVoice,
                 neuralVoiceName = s.voiceProfile.geminiVoiceName,
                 intercomDspEnabled = s.intercomDspEnabled,
                 speechRate = s.ttsSpeechRate,
-                pitch = s.ttsPitch
+                pitch = s.ttsPitch,
+                language = lang
             )
         )
     }

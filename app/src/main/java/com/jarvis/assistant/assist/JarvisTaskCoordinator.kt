@@ -2,11 +2,13 @@ package com.jarvis.assistant.assist
 
 import android.util.Log
 import com.jarvis.assistant.agent.ChatMessage
+import com.jarvis.assistant.agent.JarvisLanguageDetector
 import com.jarvis.assistant.agent.JarvisOrchestrator
 import com.jarvis.assistant.agent.JarvisSettings
 import com.jarvis.assistant.agent.JarvisState
 import com.jarvis.assistant.agent.MessageRole
 import com.jarvis.assistant.agent.PendingConfirmation
+import com.jarvis.assistant.agent.SpokenLanguage
 import com.jarvis.assistant.data.JarvisRepository
 import com.jarvis.assistant.data.SecureSettingsStore
 import com.jarvis.assistant.voice.JarvisSpeechOptions
@@ -28,9 +30,9 @@ import kotlinx.coroutines.withContext
 interface OverlaySessionHandle {
     fun isOverlayVisible(): Boolean
     fun dismissForScreenPilot()
-    fun onDirectiveReplyReady(reply: String, shouldExitImmediately: Boolean)
+    fun onDirectiveReplyReady(reply: String, shouldExitImmediately: Boolean, replyLanguage: SpokenLanguage)
     fun onDirectiveAborted()
-    fun onVoiceConfirmationPrompt(pending: PendingConfirmation)
+    fun onVoiceConfirmationPrompt(pending: PendingConfirmation, language: SpokenLanguage)
 }
 
 /**
@@ -53,6 +55,13 @@ class JarvisTaskCoordinator(
 
     @Volatile
     private var activeTaskJob: Job? = null
+
+    private val _taskActive = MutableStateFlow(false)
+    val taskActive: StateFlow<Boolean> = _taskActive.asStateFlow()
+
+    @Volatile
+    var lastSpokenLanguage: SpokenLanguage = SpokenLanguage.ENGLISH
+        private set
 
     private val _overlayVisible = MutableStateFlow(false)
     val overlayVisible: StateFlow<Boolean> = _overlayVisible.asStateFlow()
@@ -113,50 +122,69 @@ class JarvisTaskCoordinator(
         delay(340L)
     }
 
-    fun submitSpokenDirective(spoken: String) {
+    fun submitSpokenDirective(spoken: String, detectedLanguageHint: String? = null) {
         activeTaskJob?.cancel()
+        val settingsSnapshot = settingsStore.current()
+        val langHint = detectedLanguageHint ?: voiceEngine.lastDetectedLanguageTag
+        lastSpokenLanguage = JarvisLanguageDetector.detect(
+            text = spoken,
+            sttHintTag = langHint,
+            mode = settingsSnapshot.languageMode,
+            fallback = lastSpokenLanguage
+        )
         repository.addMessage(ChatMessage(role = MessageRole.USER, content = spoken))
 
+        _taskActive.value = true
         activeTaskJob = appScope.launch {
-            val history = repository.messages.value.dropLast(1)
-            val outcome = orchestrator.processUserInput(spoken, history)
+            try {
+                val history = repository.messages.value.dropLast(1)
+                val outcome = orchestrator.processUserInput(spoken, history, langHint)
+                lastSpokenLanguage = outcome.replyLanguage
 
-            repository.addMessage(
-                ChatMessage(
-                    role = MessageRole.ASSISTANT,
-                    content = outcome.reply,
-                    traces = outcome.traces
-                )
-            )
-
-            val usedScreenOrApp = outcome.traces.any { it.toolName in exitAfterTools && it.success }
-            val overlay = activeOverlay
-
-            if (outcome.aborted) {
-                soundEffects.play(StarkCue.ABORT)
-                overlay?.onDirectiveAborted()
-                return@launch
-            }
-
-            soundEffects.play(StarkCue.DONE)
-            if (overlay != null && overlay.isOverlayVisible()) {
-                overlay.onDirectiveReplyReady(outcome.reply, shouldExitImmediately = usedScreenOrApp)
-            } else {
-                // Overlay already hid for screen piloting — speak the final J.A.R.V.I.S. confirmation cleanly over the target app!
-                val settings = settingsStore.current()
-                if (settings.ttsEnabled) {
-                    _headlessSpeechActive.value = true
-                    voiceEngine.speak(
-                        text = outcome.reply,
-                        options = buildSpeechOptions(settings),
-                        onFinished = { _headlessSpeechActive.value = false }
+                repository.addMessage(
+                    ChatMessage(
+                        role = MessageRole.ASSISTANT,
+                        content = outcome.reply,
+                        traces = outcome.traces
                     )
+                )
+
+                val usedScreenOrApp = outcome.traces.any { it.toolName in exitAfterTools && it.success }
+                val overlay = activeOverlay
+
+                if (outcome.aborted) {
+                    soundEffects.play(StarkCue.ABORT)
+                    overlay?.onDirectiveAborted()
+                    return@launch
                 }
+
+                soundEffects.play(StarkCue.DONE)
+                if (overlay != null && overlay.isOverlayVisible()) {
+                    overlay.onDirectiveReplyReady(
+                        reply = outcome.reply,
+                        shouldExitImmediately = usedScreenOrApp,
+                        replyLanguage = outcome.replyLanguage
+                    )
+                } else {
+                    // Overlay already hid for screen piloting — speak the final J.A.R.V.I.S. confirmation cleanly over the target app!
+                    val settings = settingsStore.current()
+                    if (settings.ttsEnabled) {
+                        _headlessSpeechActive.value = true
+                        voiceEngine.speak(
+                            text = outcome.reply,
+                            options = buildSpeechOptions(settings, language = outcome.replyLanguage),
+                            onFinished = { _headlessSpeechActive.value = false }
+                        )
+                    }
+                }
+            } finally {
+                _taskActive.value = false
             }
         }
     }
 
     fun abortActiveTask() {
+        _taskActive.value = false
         _headlessSpeechActive.value = false
         orchestrator.abortCurrentTask()
         activeTaskJob?.cancel()
@@ -164,21 +192,23 @@ class JarvisTaskCoordinator(
     }
 
     private fun handleConfirmationRequest(pending: PendingConfirmation) {
+        val lang = lastSpokenLanguage
         val overlay = activeOverlay
         if (overlay != null && overlay.isOverlayVisible()) {
-            overlay.onVoiceConfirmationPrompt(pending)
+            overlay.onVoiceConfirmationPrompt(pending, lang)
             return
         }
         // Headless voice-only confirmation while piloting an app underneath — instant on-device voice for zero cloud pause
         val settings = settingsStore.current()
-        val prompt = buildConfirmationPrompt(pending, settings.userTitle)
+        val prompt = buildConfirmationPrompt(pending, settings.userTitle, lang)
         voiceEngine.speak(
             text = prompt,
-            options = buildSpeechOptions(settings, instantLocal = true),
+            options = buildSpeechOptions(settings, instantLocal = true, language = lang),
             onFinished = {
                 if (orchestrator.pendingConfirmation.value == null) return@speak
                 soundEffects.play(StarkCue.WAKE)
                 voiceEngine.startListening(
+                    languageMode = settings.languageMode,
                     onFinalResult = { spoken ->
                         val approved = VoiceCommandClassifier.parseConfirmation(spoken) ?: false
                         orchestrator.resolveConfirmation(approved)
@@ -191,24 +221,60 @@ class JarvisTaskCoordinator(
         )
     }
 
-    fun buildConfirmationPrompt(pending: PendingConfirmation, userTitle: String): String =
-        formatConfirmationPrompt(pending.detail, userTitle)
+    fun buildConfirmationPrompt(
+        pending: PendingConfirmation,
+        userTitle: String,
+        language: SpokenLanguage = lastSpokenLanguage
+    ): String = formatConfirmationPrompt(pending.detail, userTitle, language)
 
-    fun buildSpeechOptions(s: JarvisSettings, instantLocal: Boolean = false): JarvisSpeechOptions = JarvisSpeechOptions(
+    fun buildSpeechOptions(
+        s: JarvisSettings,
+        instantLocal: Boolean = false,
+        language: SpokenLanguage = lastSpokenLanguage
+    ): JarvisSpeechOptions = JarvisSpeechOptions(
         geminiApiKey = s.geminiApiKey,
         neuralVoiceEnabled = s.neuralJarvisVoice,
         neuralVoiceName = s.voiceProfile.geminiVoiceName,
         intercomDspEnabled = s.intercomDspEnabled,
         speechRate = s.ttsSpeechRate,
         pitch = s.ttsPitch,
-        preferInstantLocal = instantLocal
+        preferInstantLocal = instantLocal,
+        language = language
     )
 
     companion object {
         private const val TAG = "JarvisCoordinator"
 
-        fun formatConfirmationPrompt(rawDetail: String, userTitle: String): String {
+        fun formatConfirmationPrompt(
+            rawDetail: String,
+            userTitle: String,
+            language: SpokenLanguage = SpokenLanguage.ENGLISH
+        ): String {
             val detail = rawDetail.trim()
+            if (language == SpokenLanguage.GERMAN) {
+                val dePhrase = when {
+                    detail.startsWith("Tap '") && detail.endsWith("'") ->
+                        "${detail.removePrefix("Tap '").removeSuffix("'")} antippen"
+                    detail.startsWith("Tap ") ->
+                        "${detail.removePrefix("Tap ")} antippen"
+                    detail.startsWith("Dial ") ->
+                        "${detail.removePrefix("Dial ")} anrufen"
+                    detail.startsWith("To ") ->
+                        "diese Nachricht senden"
+                    detail.startsWith("Reply:") ->
+                        "diese Antwort senden"
+                    detail.startsWith("Enable ") ->
+                        "${detail.removePrefix("Enable ")} aktivieren"
+                    detail.startsWith("Disable ") ->
+                        "${detail.removePrefix("Disable ")} deaktivieren"
+                    detail.isNotBlank() ->
+                        detail
+                    else ->
+                        "diese Aktion ausführen"
+                }
+                return "Soll ich $dePhrase, $userTitle?"
+            }
+
             val phrase = when {
                 detail.startsWith("Tap '") && detail.endsWith("'") ->
                     "tapping ${detail.removePrefix("Tap '").removeSuffix("'")}"

@@ -57,12 +57,14 @@ import androidx.compose.ui.unit.sp
 import com.jarvis.assistant.agent.AiProvider
 import com.jarvis.assistant.agent.AuditLogEntry
 import com.jarvis.assistant.agent.GeminiModel
+import com.jarvis.assistant.agent.JarvisLanguageMode
 import com.jarvis.assistant.agent.JarvisMemory
 import com.jarvis.assistant.agent.JarvisSettings
 import com.jarvis.assistant.agent.JarvisVoiceProfile
 import com.jarvis.assistant.agent.PersonaStyle
 import com.jarvis.assistant.agent.RiskLevel
 import com.jarvis.assistant.agent.SafetyMode
+import com.jarvis.assistant.agent.SpokenLanguage
 import com.jarvis.assistant.device.DeviceTelemetry
 import com.jarvis.assistant.device.HyperOsSetupHelper
 import com.jarvis.assistant.ui.components.JarvisIcons
@@ -93,7 +95,7 @@ fun JarvisSheetHost(
     accent: Color,
     onDismiss: () -> Unit,
     onUpdateSettings: ((JarvisSettings) -> JarvisSettings) -> Unit,
-    onTestVoice: () -> Unit,
+    onTestVoice: (SpokenLanguage?) -> Unit,
     onRequestRuntimePermissions: () -> Unit,
     onDeleteMemory: (Long) -> Unit,
     onClearAuditLogs: () -> Unit
@@ -288,7 +290,7 @@ private fun VoiceStudioSheetContent(
     settings: JarvisSettings,
     accent: Color,
     onUpdateSettings: ((JarvisSettings) -> JarvisSettings) -> Unit,
-    onTestVoice: () -> Unit
+    onTestVoice: (SpokenLanguage?) -> Unit
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -296,24 +298,62 @@ private fun VoiceStudioSheetContent(
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            SheetHeading("Voice", "British RP synthesis & helmet intercom tone.")
+            SheetHeading("Voice & language", "Bilingual EN/DE recognition & J.A.R.V.I.S. synthesis.")
         }
-        Surface(
-            color = JarvisPalette.Elevated,
-            shape = RoundedCornerShape(20.dp),
-            border = BorderStroke(0.6.dp, JarvisPalette.HairlineStrong),
-            modifier = Modifier.clickable(onClick = onTestVoice)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Surface(
+                color = JarvisPalette.Elevated,
+                shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(0.6.dp, JarvisPalette.HairlineStrong),
+                modifier = Modifier.clickable { onTestVoice(SpokenLanguage.ENGLISH) }
             ) {
-                Icon(JarvisIcons.Play, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(4.dp))
-                Text("Sample", fontSize = 13.sp, color = JarvisPalette.TextPrimary)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp)
+                ) {
+                    Icon(JarvisIcons.Play, contentDescription = null, tint = accent, modifier = Modifier.size(15.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("EN", fontSize = 12.5.sp, color = JarvisPalette.TextPrimary)
+                }
+            }
+            Surface(
+                color = JarvisPalette.Elevated,
+                shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(0.6.dp, JarvisPalette.HairlineStrong),
+                modifier = Modifier.clickable { onTestVoice(SpokenLanguage.GERMAN) }
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp)
+                ) {
+                    Icon(JarvisIcons.Play, contentDescription = null, tint = accent, modifier = Modifier.size(15.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("DE", fontSize = 12.5.sp, color = JarvisPalette.TextPrimary)
+                }
             }
         }
     }
+
+    Spacer(Modifier.height(14.dp))
+    SegmentedRow(
+        options = JarvisLanguageMode.entries,
+        selected = settings.languageMode,
+        labelOf = {
+            when (it) {
+                JarvisLanguageMode.BILINGUAL_EN_DE -> "EN + DE"
+                JarvisLanguageMode.ENGLISH_ONLY -> "English"
+                JarvisLanguageMode.GERMAN_ONLY -> "Deutsch"
+            }
+        },
+        accent = accent,
+        onSelect = { m -> onUpdateSettings { it.copy(languageMode = m) } }
+    )
+    Spacer(Modifier.height(6.dp))
+    Text(
+        text = settings.languageMode.subtitle,
+        fontSize = 12.sp,
+        color = JarvisPalette.TextSecondary
+    )
 
     Spacer(Modifier.height(16.dp))
     SheetGroupBox {
@@ -360,6 +400,14 @@ private fun VoiceStudioSheetContent(
             checked = settings.ttsEnabled,
             accent = accent,
             onCheckedChange = { v -> onUpdateSettings { it.copy(ttsEnabled = v) } }
+        )
+        SheetDivider()
+        SheetToggleRow(
+            title = "Pause wake word when screen off",
+            subtitle = "Saves battery in pocket; resumes when screen wakes",
+            checked = settings.wakeWordPauseScreenOff,
+            accent = accent,
+            onCheckedChange = { v -> onUpdateSettings { it.copy(wakeWordPauseScreenOff = v) } }
         )
     }
 

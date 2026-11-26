@@ -8,6 +8,7 @@ import android.util.Base64
 import com.jarvis.assistant.agent.AiProvider
 import com.jarvis.assistant.agent.GeminiModel
 import com.jarvis.assistant.agent.HudColorTheme
+import com.jarvis.assistant.agent.JarvisLanguageMode
 import com.jarvis.assistant.agent.JarvisSettings
 import com.jarvis.assistant.agent.JarvisVoiceProfile
 import com.jarvis.assistant.agent.PersonaStyle
@@ -57,6 +58,13 @@ class SecureSettingsStore(context: Context) {
             JarvisVoiceProfile.valueOf(prefs.getString(KEY_VOICE_PROFILE, JarvisVoiceProfile.CHARON.name) ?: JarvisVoiceProfile.CHARON.name)
         }.getOrDefault(JarvisVoiceProfile.CHARON)
 
+        val languageMode = runCatching {
+            JarvisLanguageMode.valueOf(
+                prefs.getString(KEY_LANGUAGE_MODE, JarvisLanguageMode.BILINGUAL_EN_DE.name)
+                    ?: JarvisLanguageMode.BILINGUAL_EN_DE.name
+            )
+        }.getOrDefault(JarvisLanguageMode.BILINGUAL_EN_DE)
+
         return JarvisSettings(
             provider = provider,
             geminiApiKey = decryptSecret(prefs.getString(KEY_GEMINI_API_KEY, "") ?: ""),
@@ -79,7 +87,10 @@ class SecureSettingsStore(context: Context) {
             localReflexFirst = prefs.getBoolean(KEY_LOCAL_REFLEX, true),
             maxAgentSteps = prefs.getInt(KEY_MAX_STEPS, 10).coerceIn(2, 20),
             continuousConversation = prefs.getBoolean(KEY_CONTINUOUS_CONV, true),
-            autoDismissAfterReply = prefs.getBoolean(KEY_AUTO_DISMISS, true)
+            autoDismissAfterReply = prefs.getBoolean(KEY_AUTO_DISMISS, true),
+            languageMode = languageMode,
+            wakeWordEnabled = prefs.getBoolean(KEY_WAKE_WORD_ENABLED, true),
+            wakeWordPauseScreenOff = prefs.getBoolean(KEY_WAKE_WORD_PAUSE_SCREEN_OFF, true)
         )
     }
 
@@ -107,6 +118,9 @@ class SecureSettingsStore(context: Context) {
             .putInt(KEY_MAX_STEPS, s.maxAgentSteps.coerceIn(2, 20))
             .putBoolean(KEY_CONTINUOUS_CONV, s.continuousConversation)
             .putBoolean(KEY_AUTO_DISMISS, s.autoDismissAfterReply)
+            .putString(KEY_LANGUAGE_MODE, s.languageMode.name)
+            .putBoolean(KEY_WAKE_WORD_ENABLED, s.wakeWordEnabled)
+            .putBoolean(KEY_WAKE_WORD_PAUSE_SCREEN_OFF, s.wakeWordPauseScreenOff)
             .apply()
     }
 
@@ -196,5 +210,8 @@ class SecureSettingsStore(context: Context) {
         private const val KEY_MAX_STEPS = "max_agent_steps"
         private const val KEY_CONTINUOUS_CONV = "continuous_conversation"
         private const val KEY_AUTO_DISMISS = "auto_dismiss_after_reply"
+        private const val KEY_LANGUAGE_MODE = "language_mode"
+        private const val KEY_WAKE_WORD_ENABLED = "wake_word_enabled"
+        private const val KEY_WAKE_WORD_PAUSE_SCREEN_OFF = "wake_word_pause_screen_off"
     }
 }

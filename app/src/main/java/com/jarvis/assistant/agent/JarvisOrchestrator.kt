@@ -15,7 +15,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 data class OrchestratorOutcome(
     val reply: String,
     val traces: List<ToolExecutionTrace>,
-    val aborted: Boolean = false
+    val aborted: Boolean = false,
+    val replyLanguage: SpokenLanguage = SpokenLanguage.ENGLISH
 )
 
 class JarvisOrchestrator(
@@ -65,12 +66,18 @@ class JarvisOrchestrator(
 
     suspend fun processUserInput(
         rawInput: String,
-        recentHistory: List<ChatMessage>
+        recentHistory: List<ChatMessage>,
+        detectedLanguageHint: String? = null
     ): OrchestratorOutcome {
         abortFlag.set(false)
         _liveTraces.value = emptyList()
         val settings = settingsProvider()
         val traces = mutableListOf<ToolExecutionTrace>()
+        val userLang = JarvisLanguageDetector.detect(
+            text = rawInput,
+            sttHintTag = detectedLanguageHint,
+            mode = settings.languageMode
+        )
 
         // Expand custom/built-in protocols when triggered by name or trigger phrase
         val effectiveInput = expandProtocolIfMatched(rawInput, settings)
@@ -78,7 +85,7 @@ class JarvisOrchestrator(
         try {
             // 1. Try fast offline Local Reflex Router when enabled or when no cloud LLM is configured
             val localPlan = if (settings.localReflexFirst || !settings.hasActiveCloudKey()) {
-                LocalCommandRouter.match(rawInput) ?: LocalCommandRouter.match(effectiveInput)
+                LocalCommandRouter.match(rawInput, userLang) ?: LocalCommandRouter.match(effectiveInput, userLang)
             } else null
 
             if (localPlan != null) {
@@ -86,7 +93,12 @@ class JarvisOrchestrator(
                 val results = mutableListOf<ToolResult>()
                 for (call in localPlan.toolCalls) {
                     if (abortFlag.get()) {
-                        return OrchestratorOutcome("Operation aborted, ${settings.userTitle}.", traces, aborted = true)
+                        val abortMsg = if (userLang == SpokenLanguage.GERMAN) {
+                            "Vorgang abgebrochen, ${settings.userTitle}."
+                        } else {
+                            "Operation aborted, ${settings.userTitle}."
+                        }
+                        return OrchestratorOutcome(abortMsg, traces, aborted = true, replyLanguage = userLang)
                     }
                     val (result, trace) = runGuardedToolCall(call, settings)
                     traces.add(trace)
@@ -94,26 +106,34 @@ class JarvisOrchestrator(
                     results.add(result)
                 }
                 val reply = localPlan.composeReply(results, settings.userTitle)
+                val finalLang = JarvisLanguageDetector.detectReplyLanguage(reply, fallback = userLang)
                 transition(JarvisState.IDLE, "Reflex task complete")
-                return OrchestratorOutcome(reply = reply, traces = traces)
+                return OrchestratorOutcome(reply = reply, traces = traces, replyLanguage = finalLang)
             }
 
             // 2. Escalate to Cloud / Local LLM Agentic Loop
             val llmClient = llmClientFactory(settings)
             if (llmClient == null) {
                 transition(JarvisState.IDLE, "Offline Reflex Core active")
-                return OrchestratorOutcome(
-                    reply = "My cloud neural core is not connected yet, ${settings.userTitle}. " +
+                val offlineMsg = if (userLang == SpokenLanguage.GERMAN) {
+                    "Mein Cloud-Kern ist noch nicht verbunden, ${settings.userTitle}. Direkte Offline-Befehle wie Taschenlampe, Lautstärke, Helligkeit, Apps öffnen, Timer und Wecker funktionieren bereits. Hinterlege einen Gemini-API-Schlüssel in den Einstellungen für volle Intelligenz."
+                } else {
+                    "My cloud neural core is not connected yet, ${settings.userTitle}. " +
                         "Instant offline commands (flashlight, volume, brightness, open apps, timers, alarms, media, diagnostics, and Night/Focus/Stealth protocols) work right now. " +
-                        "Add a Google Gemini key or local Ollama endpoint in the Core Settings tab to unlock full conversational intelligence and autonomous multi-step screen control.",
-                    traces = traces
+                        "Add a Google Gemini key or local Ollama endpoint in the Core Settings tab to unlock full conversational intelligence and autonomous multi-step screen control."
+                }
+                return OrchestratorOutcome(
+                    reply = offlineMsg,
+                    traces = traces,
+                    replyLanguage = userLang
                 )
             }
 
             val systemPrompt = JarvisPersona.buildSystemPrompt(
                 settings = settings,
                 telemetryContext = telemetrySummaryProvider(),
-                memories = store.getMemoriesSnapshot()
+                memories = store.getMemoriesSnapshot(),
+                replyLanguage = userLang
             )
             val messages = mutableListOf<LlmMessage>()
             recentHistory.takeLast(12).forEach { m ->
@@ -131,7 +151,12 @@ class JarvisOrchestrator(
             for (step in 1..maxSteps) {
                 if (abortFlag.get()) {
                     transition(JarvisState.IDLE, "Aborted")
-                    return OrchestratorOutcome("Task aborted on your mark, ${settings.userTitle}.", traces, aborted = true)
+                    val msg = if (userLang == SpokenLanguage.GERMAN) {
+                        "Auftrag abgebrochen, ${settings.userTitle}."
+                    } else {
+                        "Task aborted on your mark, ${settings.userTitle}."
+                    }
+                    return OrchestratorOutcome(msg, traces, aborted = true, replyLanguage = userLang)
                 }
 
                 transition(JarvisState.THINKING, "Neural cycle $step/$maxSteps...")
@@ -139,13 +164,28 @@ class JarvisOrchestrator(
 
                 if (abortFlag.get()) {
                     transition(JarvisState.IDLE, "Aborted")
-                    return OrchestratorOutcome("Task aborted, ${settings.userTitle}.", traces, aborted = true)
+                    val msg = if (userLang == SpokenLanguage.GERMAN) {
+                        "Auftrag abgebrochen, ${settings.userTitle}."
+                    } else {
+                        "Task aborted, ${settings.userTitle}."
+                    }
+                    return OrchestratorOutcome(msg, traces, aborted = true, replyLanguage = userLang)
                 }
 
                 if (response.toolCalls.isEmpty()) {
-                    val finalReply = response.text.ifBlank { "Done, ${settings.userTitle}." }
+                    val defaultDone = if (userLang == SpokenLanguage.GERMAN) {
+                        "Erledigt, ${settings.userTitle}."
+                    } else {
+                        "Done, ${settings.userTitle}."
+                    }
+                    val finalReply = response.text.ifBlank { defaultDone }
+                    val replyLang = if (settings.languageMode == JarvisLanguageMode.BILINGUAL_EN_DE) {
+                        JarvisLanguageDetector.detectReplyLanguage(finalReply, fallback = userLang)
+                    } else {
+                        userLang
+                    }
                     transition(JarvisState.IDLE, "Standby")
-                    return OrchestratorOutcome(reply = finalReply, traces = traces)
+                    return OrchestratorOutcome(reply = finalReply, traces = traces, replyLanguage = replyLang)
                 }
 
                 messages.add(LlmMessage.Assistant(response.text, response.toolCalls, response.rawGeminiParts))
@@ -153,7 +193,12 @@ class JarvisOrchestrator(
                 for (call in response.toolCalls) {
                     if (abortFlag.get()) {
                         transition(JarvisState.IDLE, "Aborted")
-                        return OrchestratorOutcome("Operation halted, ${settings.userTitle}.", traces, aborted = true)
+                        val msg = if (userLang == SpokenLanguage.GERMAN) {
+                            "Vorgang gestoppt, ${settings.userTitle}."
+                        } else {
+                            "Operation halted, ${settings.userTitle}."
+                        }
+                        return OrchestratorOutcome(msg, traces, aborted = true, replyLanguage = userLang)
                     }
                     transition(JarvisState.EXECUTING, formatExecutingDetail(step, call))
                     val (result, trace) = runGuardedToolCall(call, settings)
@@ -170,18 +215,30 @@ class JarvisOrchestrator(
             }
 
             transition(JarvisState.IDLE, "Max pilot steps reached")
+            val limitMsg = if (userLang == SpokenLanguage.GERMAN) {
+                "Ich habe das Sicherheitslimit von $maxSteps Schritten erreicht, ${settings.userTitle}. Sag Bescheid, falls ich weitermachen soll."
+            } else {
+                "I reached the maximum autonomous step limit ($maxSteps) for safety, ${settings.userTitle}. Let me know if you'd like me to continue."
+            }
             return OrchestratorOutcome(
-                reply = "I reached the maximum autonomous step limit ($maxSteps) for safety, ${settings.userTitle}. Let me know if you'd like me to continue.",
-                traces = traces
+                reply = limitMsg,
+                traces = traces,
+                replyLanguage = userLang
             )
         } catch (ce: CancellationException) {
             transition(JarvisState.IDLE, "Cancelled")
             throw ce
         } catch (err: Throwable) {
             transition(JarvisState.ERROR, err.message ?: "Execution error")
+            val errReply = if (userLang == SpokenLanguage.GERMAN) {
+                "Systemfehler aufgetreten, ${settings.userTitle}: ${err.message ?: "Unbekannter Fehler"}"
+            } else {
+                "I encountered a systems fault, ${settings.userTitle}: ${err.message ?: "Unknown error"}"
+            }
             return OrchestratorOutcome(
-                reply = "I encountered a systems fault, ${settings.userTitle}: ${err.message ?: "Unknown error"}",
-                traces = traces
+                reply = errReply,
+                traces = traces,
+                replyLanguage = userLang
             )
         }
     }

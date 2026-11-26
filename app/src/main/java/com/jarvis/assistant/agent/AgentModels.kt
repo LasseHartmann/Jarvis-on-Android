@@ -236,7 +236,10 @@ data class JarvisSettings(
     val localReflexFirst: Boolean = true,
     val maxAgentSteps: Int = 10,
     val continuousConversation: Boolean = true,
-    val autoDismissAfterReply: Boolean = true
+    val autoDismissAfterReply: Boolean = true,
+    val languageMode: JarvisLanguageMode = JarvisLanguageMode.BILINGUAL_EN_DE,
+    val wakeWordEnabled: Boolean = true,
+    val wakeWordPauseScreenOff: Boolean = true
 ) {
     fun hasActiveCloudKey(): Boolean = when (provider) {
         AiProvider.GEMINI -> geminiApiKey.isNotBlank()

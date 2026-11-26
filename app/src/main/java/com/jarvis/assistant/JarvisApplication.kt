@@ -109,6 +109,7 @@ class JarvisApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         container = JarvisAppContainer(this)
+        container.voiceEngine.ensureBilingualOfflineModels()
     }
 
     override fun onTerminate() {

@@ -57,7 +57,9 @@ class JarvisVoiceInteractionSession(context: Context) : VoiceInteractionSession(
                 hide()
             }
         )
-        controller?.startSession()
+        val initialCommand = args?.getString(JarvisVoiceInteractionService.EXTRA_INITIAL_COMMAND)
+        val langHint = args?.getString(JarvisVoiceInteractionService.EXTRA_LANGUAGE_HINT)
+        controller?.startSession(initialCommand = initialCommand, languageHint = langHint)
     }
 
     override fun onHide() {

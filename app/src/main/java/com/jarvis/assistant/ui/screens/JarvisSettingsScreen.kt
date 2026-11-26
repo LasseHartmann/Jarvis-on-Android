@@ -52,6 +52,7 @@ import com.jarvis.assistant.agent.GeminiModel
 import com.jarvis.assistant.agent.HudColorTheme
 import com.jarvis.assistant.agent.JarvisMemory
 import com.jarvis.assistant.agent.JarvisSettings
+import com.jarvis.assistant.agent.SpokenLanguage
 import com.jarvis.assistant.assist.JarvisAssistActivity
 import com.jarvis.assistant.device.DeviceTelemetry
 import com.jarvis.assistant.device.HyperOsSetupHelper
@@ -66,7 +67,7 @@ fun JarvisSettingsScreen(
     memories: List<JarvisMemory>,
     auditLogs: List<AuditLogEntry>,
     onUpdateSettings: ((JarvisSettings) -> JarvisSettings) -> Unit,
-    onTestVoice: () -> Unit,
+    onTestVoice: (SpokenLanguage?) -> Unit,
     onPermissionsUpdated: () -> Unit,
     onDeleteMemory: (Long) -> Unit,
     onClearAuditLogs: () -> Unit,
@@ -166,7 +167,12 @@ fun JarvisSettingsScreen(
                     Spacer(Modifier.width(7.dp))
                     Text(
                         text = if (settings.hasActiveCloudKey() || settings.provider == AiProvider.LOCAL_ONLY) {
-                            "$activeModelLabel  ·  Hold power to wake"
+                            val wakeHint = if (settings.wakeWordEnabled && telemetry.micGranted) {
+                                "Say \"Jarvis\" or hold power"
+                            } else {
+                                "Hold power to wake"
+                            }
+                            "$activeModelLabel  ·  $wakeHint"
                         } else {
                             "Add an API key to connect"
                         },
@@ -190,7 +196,7 @@ fun JarvisSettingsScreen(
                         label = "Test voice",
                         icon = JarvisIcons.Speaker,
                         accent = JarvisPalette.TextPrimary,
-                        onClick = onTestVoice
+                        onClick = { onTestVoice(null) }
                     )
                 }
             }
@@ -230,12 +236,22 @@ fun JarvisSettingsScreen(
             SettingsGroup(title = "Voice & appearance") {
                 NavigationRow(
                     icon = JarvisIcons.Voice,
-                    title = "Voice",
-                    value = buildString {
-                        append(settings.voiceProfile.geminiVoiceName)
-                        if (settings.intercomDspEnabled) append(" · Intercom")
-                    },
+                    title = "Voice & language",
+                    value = "${settings.languageMode.displayName} · ${settings.voiceProfile.geminiVoiceName}",
                     onClick = { activeSheet = ActiveSettingsSheet.VOICE }
+                )
+                GroupDivider()
+                ToggleRow(
+                    icon = JarvisIcons.Wave,
+                    title = "Say \"Jarvis\" to wake",
+                    checked = settings.wakeWordEnabled,
+                    accent = accent,
+                    onCheckedChange = { enabled ->
+                        if (enabled && !telemetry.micGranted) {
+                            permLauncher.launch(runtimePermissions)
+                        }
+                        onUpdateSettings { it.copy(wakeWordEnabled = enabled) }
+                    }
                 )
                 GroupDivider()
                 FinishSwatchRow(
