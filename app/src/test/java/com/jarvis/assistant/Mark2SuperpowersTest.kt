@@ -4,10 +4,13 @@ import com.jarvis.assistant.agent.GeminiLlmClient
 import com.jarvis.assistant.agent.JarvisMemory
 import com.jarvis.assistant.agent.JarvisProtocol
 import com.jarvis.assistant.agent.JarvisReminder
+import com.jarvis.assistant.agent.JarvisSettings
 import com.jarvis.assistant.agent.LocalCommandRouter
 import com.jarvis.assistant.agent.RiskLevel
+import com.jarvis.assistant.agent.WakeWordModel
 import com.jarvis.assistant.assist.AmbientPillStateResolver
 import com.jarvis.assistant.data.JarvisStore
+import com.jarvis.assistant.device.DeviceTelemetry
 import com.jarvis.assistant.tools.AlexaHelper
 import com.jarvis.assistant.tools.CreateProtocolTool
 import com.jarvis.assistant.tools.DeleteProtocolTool
@@ -16,6 +19,9 @@ import com.jarvis.assistant.tools.GetWeatherTool
 import com.jarvis.assistant.tools.IrProtocolEncoder
 import com.jarvis.assistant.tools.ListRemindersTool
 import com.jarvis.assistant.tools.SendWhatsAppTool
+import com.jarvis.assistant.tools.TransitParser
+import com.jarvis.assistant.voice.SpeakerVoiceprintEngine
+import com.jarvis.assistant.widget.JarvisHudWidgetProvider
 import kotlinx.coroutines.test.runTest
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -199,6 +205,66 @@ class Mark2SuperpowersTest {
         val v2 = AlexaHelper.buildVoiceMonkeyAnnounceBody("tok123", "kitchen-echo", "Dinner is ready", v2 = true)
         assertEquals("Dinner is ready", v2.getString("text"))
         assertFalse(v2.has("speech"))
+    }
+
+    @Test
+    fun speakerVoiceprintMathAndSerializationWorkAccurately() {
+        val v1 = SpeakerVoiceprintEngine.l2Normalize(FloatArray(192) { if (it % 2 == 0) 1f else 0.1f })
+        val v2 = SpeakerVoiceprintEngine.l2Normalize(FloatArray(192) { if (it % 2 == 0) 0.95f else 0.15f })
+        val other = SpeakerVoiceprintEngine.l2Normalize(FloatArray(192) { if (it % 2 == 1) 1f else -0.2f })
+
+        val same = SpeakerVoiceprintEngine.matchScore(v2, listOf(v1))
+        val diff = SpeakerVoiceprintEngine.matchScore(other, listOf(v1))
+        assertTrue("Expected high same-speaker match, got $same", same > 0.95f)
+        assertTrue("Expected low different-speaker match, got $diff", diff < 0.25f)
+
+        val serialized = SpeakerVoiceprintEngine.serializeVoiceprints(listOf(v1, v2))
+        val parsed = SpeakerVoiceprintEngine.parseVoiceprints(serialized)
+        assertEquals(2, parsed.size)
+        assertEquals(192, parsed[0].size)
+
+        val filters = SpeakerVoiceprintEngine.buildSlaneyMelFilterbank(16_000, 512, 64, 0.0, 8000.0)
+        assertEquals(64, filters.size)
+        assertEquals(257, filters[0].size)
+        assertTrue(filters.all { row -> row.any { it > 0f } })
+    }
+
+    @Test
+    fun transitParsersFormatMvgAndDbResponsesCleanly() {
+        val mvgDeps = """
+            [{"plannedDepartureTime":1795811940000,"realtimeDepartureTime":1795812180000,"delayInMinutes":4,"label":"U6","destination":"Goetheplatz","platform":2,"cancelled":false}]
+        """.trimIndent()
+        val depSummary = TransitParser.formatMvgDepartures("Marienplatz", mvgDeps)
+        assertTrue(depSummary.contains("U6 -> Goetheplatz"))
+        assertTrue(depSummary.contains("+4m delay"))
+        assertTrue(depSummary.contains("Pl. 2"))
+
+        val dbDeps = """
+            {"departures":[{"train":"ICE 528","destination":"Frankfurt(Main)Hbf","scheduledDeparture":"14:15","delayDeparture":0,"platform":"18","isCancelled":0}]}
+        """.trimIndent()
+        val dbSummary = TransitParser.formatDbDepartures("München Hbf", dbDeps)
+        assertTrue(dbSummary.contains("ICE 528 -> Frankfurt(Main)Hbf"))
+        assertTrue(dbSummary.contains("Pl. 18"))
+
+        val parsedClock = TransitParser.parseClockOrIsoTimeMs("18:30", nowMs = 1_700_000_000_000L)
+        assertNotNull(parsedClock)
+        assertEquals("Checking transit", AmbientPillStateResolver.humanizeActionLabel("get_public_transit"))
+    }
+
+    @Test
+    fun amoledWidgetFormattersReflectTelemetryWakeWordAndReminders() {
+        val s = JarvisSettings(
+            wakeWordEnabled = true,
+            wakeWordModel = WakeWordModel.COMPUTER,
+            pcBridgeUrl = "http://192.168.1.5:8765",
+            pcBridgeToken = "tok"
+        )
+        val t = DeviceTelemetry(batteryPercent = 88, isCharging = true, ramUsedPercent = 42, accessibilityEnabled = true)
+        val badge = JarvisHudWidgetProvider.formatStatusBadge(s, t)
+        assertTrue(badge.contains("88%"))
+        assertTrue(badge.contains("PC"))
+        assertEquals("Say \"Computer\"", JarvisHudWidgetProvider.formatWakeLine(s))
+        assertTrue(JarvisHudWidgetProvider.formatReminderOrTelemetryLine(null, t).contains("RAM 42%"))
     }
 
     private class InMemoryMark2Store : JarvisStore {

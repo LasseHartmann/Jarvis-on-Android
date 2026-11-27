@@ -230,6 +230,108 @@ class DebugPilotReceiver : BroadcastReceiver() {
                         }
                     }
 
+                    "bench_mark3" -> {
+                        val app = context.applicationContext as? JarvisApplication
+                        if (app != null) {
+                            val apiKey = app.container.settingsStore.current().geminiApiKey
+                            val registry = app.container.toolRegistry
+                            withContext(Dispatchers.IO) {
+                                val tts = GeminiTtsClient()
+
+                                // 1. Benchmark all 4 custom wake-word ONNX models!
+                                for (wm in com.jarvis.assistant.agent.WakeWordModel.entries) {
+                                    runCatching {
+                                        OpenWakeWordEngine.fromAssets(context.applicationContext, wm.assetPath).use { eng ->
+                                            var silMax = 0f
+                                            val sil = ShortArray(OpenWakeWordEngine.CHUNK_SAMPLES)
+                                            repeat(25) {
+                                                val s = eng.processPcm16Chunk(sil)
+                                                if (s > silMax) silMax = s
+                                            }
+                                            val pcm24 = tts.synthesizeJarvisSpeech(apiKey, wm.spokenPhrase, "Charon", SpokenLanguage.ENGLISH)
+                                            var peak = -1f
+                                            if (pcm24 != null) {
+                                                val pcm16 = OpenWakeWordEngine.resampleLinear(pcm24.samples, pcm24.sampleRateHz, 16_000)
+                                                val padded = ShortArray(24_000 + pcm16.size + 12_800)
+                                                System.arraycopy(pcm16, 0, padded, 24_000, pcm16.size)
+                                                eng.reset()
+                                                var pos = 0
+                                                while (pos + OpenWakeWordEngine.CHUNK_SAMPLES <= padded.size) {
+                                                    val sc = eng.processPcm16Chunk(padded.copyOfRange(pos, pos + OpenWakeWordEngine.CHUNK_SAMPLES))
+                                                    if (sc > peak) peak = sc
+                                                    pos += OpenWakeWordEngine.CHUNK_SAMPLES
+                                                }
+                                            }
+                                            Log.i(TAG, "MARK3_WAKEWORD[${wm.name}]: silMax=${"%.4f".format(silMax)} peak=${"%.4f".format(peak)}")
+                                        }
+                                    }.onFailure { err ->
+                                        Log.e(TAG, "MARK3_WAKEWORD[${wm.name}] ERR: ${err.message}")
+                                    }
+                                }
+
+                                // 2. Benchmark NVIDIA NeMo SpeakerNet ONNX on BOTH real-human sherpa-onnx WAVs (if pushed to /data/local/tmp) & TTS!
+                                runCatching {
+                                    com.jarvis.assistant.voice.SpeakerVoiceprintEngine.fromAssets(context.applicationContext).use { spk ->
+                                        fun readWavPcm16(path: String): ShortArray? = runCatching {
+                                            val bytes = java.io.File(path).takeIf { it.exists() }?.readBytes() ?: return@runCatching null
+                                            // Find 'data' chunk header in RIFF WAV
+                                            var idx = 12
+                                            while (idx + 8 <= bytes.size) {
+                                                val id = String(bytes, idx, 4, Charsets.US_ASCII)
+                                                val sz = java.nio.ByteBuffer.wrap(bytes, idx + 4, 4).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
+                                                if (id == "data") {
+                                                    val start = idx + 8
+                                                    val avail = minOf(sz, bytes.size - start)
+                                                    val out = ShortArray(avail / 2)
+                                                    java.nio.ByteBuffer.wrap(bytes, start, out.size * 2)
+                                                        .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                                                        .asShortBuffer()
+                                                        .get(out)
+                                                    return@runCatching out
+                                                }
+                                                idx += 8 + sz
+                                            }
+                                            null
+                                        }.getOrNull()
+
+                                        val wF1 = readWavPcm16("/data/local/tmp/fangjun-sr-1.wav")
+                                        val wF2 = readWavPcm16("/data/local/tmp/fangjun-test-sr-2.wav")
+                                        val wL1 = readWavPcm16("/data/local/tmp/liudehua-sr-1.wav")
+                                        val wJ1 = readWavPcm16("/data/local/tmp/leijun-sr-1.wav")
+                                        if (wF1 != null && wF2 != null && wL1 != null && wJ1 != null) {
+                                            val t0 = System.currentTimeMillis()
+                                            val e1 = spk.extractEmbedding(wF1)
+                                            val ms1 = System.currentTimeMillis() - t0
+                                            val t1 = System.currentTimeMillis()
+                                            val e2 = spk.extractEmbedding(wF2)
+                                            val ms2 = System.currentTimeMillis() - t1
+                                            val eL = spk.extractEmbedding(wL1)
+                                            val eJ = spk.extractEmbedding(wJ1)
+                                            val same = if (e1 != null && e2 != null) com.jarvis.assistant.voice.SpeakerVoiceprintEngine.cosineSimilarity(e1, e2) else -1f
+                                            val diff1 = if (e1 != null && eL != null) com.jarvis.assistant.voice.SpeakerVoiceprintEngine.cosineSimilarity(e1, eL) else -1f
+                                            val diff2 = if (e1 != null && eJ != null) com.jarvis.assistant.voice.SpeakerVoiceprintEngine.cosineSimilarity(e1, eJ) else -1f
+                                            Log.i(TAG, "MARK3_HUMAN_VOICEPRINT: coldMs=$ms1 warmMs=$ms2 sameHuman=${"%.3f".format(same)} diffHuman1=${"%.3f".format(diff1)} diffHuman2=${"%.3f".format(diff2)}")
+                                        }
+                                    }
+                                }.onFailure { err ->
+                                    Log.e(TAG, "MARK3_VOICEPRINT ERR: ${err.message}", err)
+                                }
+
+                                // 3. Live MVG Munich Public Transit route + departures test!
+                                val transit = registry.execute(
+                                    com.jarvis.assistant.agent.ToolCall(
+                                        id = "dbg_transit",
+                                        name = "get_public_transit",
+                                        arguments = org.json.JSONObject()
+                                            .put("origin", "Marienplatz")
+                                            .put("destination", "Hauptbahnhof")
+                                    )
+                                )
+                                Log.i(TAG, "MARK3_TRANSIT: tools=${registry.allSpecs().size} ok=${transit.success} out=${transit.output.take(280).replace('\n', ' ')}")
+                            }
+                        }
+                    }
+
                     else -> Log.w(TAG, "RESULT: unknown action=$action")
                 }
             } finally {

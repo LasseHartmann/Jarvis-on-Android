@@ -77,6 +77,7 @@ object AmbientPillStateResolver {
             lower.contains("fetch_webpage") -> "Reading page"
             lower.contains("get_current_location") -> "Locating"
             lower.contains("get_weather") -> "Checking weather"
+            lower.contains("public_transit") -> "Checking transit"
             lower.contains("send_whatsapp") -> "WhatsApp"
             lower.contains("play_music") -> "Starting music"
             lower.contains("control_ir_device") -> "IR blaster"

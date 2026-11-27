@@ -132,6 +132,53 @@ enum class JarvisVoiceProfile(
     ENCELADUS("Enceladus", "Deep Core (Enceladus)", "Smooth, resonant lower register")
 }
 
+enum class WakeWordModel(
+    val displayName: String,
+    val spokenPhrase: String,
+    val assetPath: String,
+    val defaultThreshold: Float,
+    val strongThreshold: Float
+) {
+    HEY_JARVIS(
+        displayName = "Hey Jarvis",
+        spokenPhrase = "Hey Jarvis",
+        assetPath = "wakeword/hey_jarvis_v0.1.onnx",
+        defaultThreshold = 0.38f,
+        strongThreshold = 0.50f
+    ),
+    JARVIS(
+        displayName = "Jarvis",
+        spokenPhrase = "Jarvis",
+        assetPath = "wakeword/jarvis_v1.onnx",
+        defaultThreshold = 0.36f,
+        strongThreshold = 0.48f
+    ),
+    HEY_FRIDAY(
+        displayName = "Hey Friday",
+        spokenPhrase = "Hey Friday",
+        assetPath = "wakeword/hey_friday.onnx",
+        defaultThreshold = 0.36f,
+        strongThreshold = 0.48f
+    ),
+    COMPUTER(
+        displayName = "Computer",
+        spokenPhrase = "Computer",
+        assetPath = "wakeword/computer_v2.onnx",
+        defaultThreshold = 0.42f,
+        strongThreshold = 0.54f
+    )
+}
+
+enum class VoiceprintSensitivity(
+    val displayName: String,
+    val description: String,
+    val cosineThreshold: Float
+) {
+    RELAXED("Relaxed", "Easier wake in noisy rooms", 0.42f),
+    BALANCED("Balanced", "Blocks other speakers & TV audio", 0.50f),
+    STRICT("Strict", "High-security biometric match", 0.58f)
+}
+
 enum class RiskLevel {
     SAFE,
     SENSITIVE,
@@ -250,6 +297,10 @@ data class JarvisSettings(
     val languageMode: JarvisLanguageMode = JarvisLanguageMode.BILINGUAL_EN_DE,
     val wakeWordEnabled: Boolean = true,
     val wakeWordPauseScreenOff: Boolean = true,
+    val wakeWordModel: WakeWordModel = WakeWordModel.HEY_JARVIS,
+    val voiceprintLockEnabled: Boolean = false,
+    val voiceprintSensitivity: VoiceprintSensitivity = VoiceprintSensitivity.BALANCED,
+    val enrolledVoiceprintsJson: String = "",
     val bluetoothWhisperEnabled: Boolean = true,
     val homeAssistantUrl: String = "",
     val homeAssistantToken: String = "",
@@ -259,6 +310,13 @@ data class JarvisSettings(
     val alexaDefaultDevice: String = "",
     val alexaWebhookUrl: String = ""
 ) {
+    fun enrolledVoiceprintCount(): Int = runCatching {
+        if (enrolledVoiceprintsJson.isBlank()) 0
+        else org.json.JSONArray(enrolledVoiceprintsJson).length()
+    }.getOrDefault(0)
+
+    fun hasEnrolledVoiceprint(): Boolean = enrolledVoiceprintCount() > 0
+
     fun hasActiveCloudKey(): Boolean = when (provider) {
         AiProvider.GEMINI -> geminiApiKey.isNotBlank()
         AiProvider.OPENAI_COMPATIBLE -> openAiBaseUrl.isNotBlank() &&

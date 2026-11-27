@@ -19,7 +19,8 @@ import java.nio.FloatBuffer
 class OpenWakeWordEngine(
     melBytes: ByteArray,
     embeddingBytes: ByteArray,
-    wakeWordBytes: ByteArray
+    wakeWordBytes: ByteArray,
+    val wakeWordAsset: String = DEFAULT_WAKE_ASSET
 ) : AutoCloseable {
 
     private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
@@ -179,12 +180,17 @@ class OpenWakeWordEngine(
         private const val MAX_MEL_FRAMES = 96
         private const val EMBEDDING_DIM = 96
 
-        fun fromAssets(context: Context): OpenWakeWordEngine {
+        const val DEFAULT_WAKE_ASSET = "wakeword/hey_jarvis_v0.1.onnx"
+
+        fun fromAssets(
+            context: Context,
+            wakeWordAsset: String = DEFAULT_WAKE_ASSET
+        ): OpenWakeWordEngine {
             val assets = context.assets
             val mel = assets.open("wakeword/melspectrogram.onnx").use { it.readBytes() }
             val emb = assets.open("wakeword/embedding_model.onnx").use { it.readBytes() }
-            val wake = assets.open("wakeword/hey_jarvis_v0.1.onnx").use { it.readBytes() }
-            return OpenWakeWordEngine(mel, emb, wake)
+            val wake = assets.open(wakeWordAsset).use { it.readBytes() }
+            return OpenWakeWordEngine(mel, emb, wake, wakeWordAsset)
         }
 
         /** Linear resampler (e.g. 24 kHz TTS PCM -> 16 kHz for self-testing). */

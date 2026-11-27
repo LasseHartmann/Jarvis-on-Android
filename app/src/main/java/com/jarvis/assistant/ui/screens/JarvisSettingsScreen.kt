@@ -61,6 +61,7 @@ import com.jarvis.assistant.device.HyperOsSetupHelper
 import com.jarvis.assistant.ui.components.JarvisIcons
 import com.jarvis.assistant.ui.components.MiniJarvisOrb
 import com.jarvis.assistant.ui.theme.JarvisPalette
+import com.jarvis.assistant.ui.viewmodel.VoiceprintUiState
 
 @Composable
 fun JarvisSettingsScreen(
@@ -70,9 +71,13 @@ fun JarvisSettingsScreen(
     auditLogs: List<AuditLogEntry>,
     protocols: List<JarvisProtocol> = emptyList(),
     reminders: List<JarvisReminder> = emptyList(),
+    voiceprintUi: VoiceprintUiState = VoiceprintUiState(),
     onUpdateSettings: ((JarvisSettings) -> JarvisSettings) -> Unit,
     onTestVoice: (SpokenLanguage?) -> Unit,
     onPermissionsUpdated: () -> Unit,
+    onRecordVoiceprintSample: () -> Unit = {},
+    onTestVoiceprint: () -> Unit = {},
+    onClearVoiceprints: () -> Unit = {},
     onDeleteMemory: (Long) -> Unit,
     onDeleteProtocol: (Long) -> Unit = {},
     onCancelReminder: (Long) -> Unit = {},
@@ -177,7 +182,7 @@ fun JarvisSettingsScreen(
                     Text(
                         text = if (settings.hasActiveCloudKey() || settings.provider == AiProvider.LOCAL_ONLY) {
                             val wakeHint = if (settings.wakeWordEnabled && telemetry.micGranted) {
-                                "Say \"Hey Jarvis\" or hold power"
+                                "Say \"${settings.wakeWordModel.displayName}\" or hold power"
                             } else {
                                 "Hold power to wake"
                             }
@@ -257,7 +262,7 @@ fun JarvisSettingsScreen(
                 GroupDivider()
                 ToggleRow(
                     icon = JarvisIcons.Wave,
-                    title = "Say \"Hey Jarvis\" to wake",
+                    title = "Say \"${settings.wakeWordModel.displayName}\" to wake",
                     checked = settings.wakeWordEnabled,
                     accent = accent,
                     onCheckedChange = { enabled ->
@@ -266,6 +271,15 @@ fun JarvisSettingsScreen(
                         }
                         onUpdateSettings { it.copy(wakeWordEnabled = enabled) }
                     }
+                )
+                GroupDivider()
+                val vpLocked = settings.voiceprintLockEnabled && settings.hasEnrolledVoiceprint()
+                NavigationRow(
+                    icon = JarvisIcons.Shield,
+                    title = "Wake word & voiceprint",
+                    value = if (vpLocked) "${settings.wakeWordModel.displayName} · Locked" else settings.wakeWordModel.displayName,
+                    valueColor = if (vpLocked) JarvisPalette.Success else JarvisPalette.TextSecondary,
+                    onClick = { activeSheet = ActiveSettingsSheet.WAKE_IDENTITY }
                 )
                 GroupDivider()
                 FinishSwatchRow(
@@ -380,11 +394,15 @@ fun JarvisSettingsScreen(
             auditLogs = auditLogs,
             protocols = protocols,
             reminders = reminders,
+            voiceprintUi = voiceprintUi,
             accent = accent,
             onDismiss = { activeSheet = null },
             onUpdateSettings = onUpdateSettings,
             onTestVoice = onTestVoice,
             onRequestRuntimePermissions = { permLauncher.launch(runtimePermissions) },
+            onRecordVoiceprintSample = onRecordVoiceprintSample,
+            onTestVoiceprint = onTestVoiceprint,
+            onClearVoiceprints = onClearVoiceprints,
             onDeleteMemory = onDeleteMemory,
             onDeleteProtocol = onDeleteProtocol,
             onCancelReminder = onCancelReminder,

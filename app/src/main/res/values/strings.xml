@@ -4,4 +4,5 @@
     <string name="accessibility_service_description">Allows J.A.R.V.I.S. to read visible UI elements (with passwords automatically redacted), tap controls, enter text, scroll, and execute global system actions on your Xiaomi 15T Pro.</string>
     <string name="notification_service_label">J.A.R.V.I.S. Notification Core</string>
     <string name="qs_tile_label">J.A.R.V.I.S.</string>
+    <string name="widget_hud_description">Pure-black AMOLED J.A.R.V.I.S. widget with live telemetry, active reminders, and 1-tap voice wake.</string>
 </resources>

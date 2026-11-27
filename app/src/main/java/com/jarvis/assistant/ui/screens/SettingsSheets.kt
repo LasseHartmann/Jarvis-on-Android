@@ -67,10 +67,13 @@ import com.jarvis.assistant.agent.PersonaStyle
 import com.jarvis.assistant.agent.RiskLevel
 import com.jarvis.assistant.agent.SafetyMode
 import com.jarvis.assistant.agent.SpokenLanguage
+import com.jarvis.assistant.agent.VoiceprintSensitivity
+import com.jarvis.assistant.agent.WakeWordModel
 import com.jarvis.assistant.device.DeviceTelemetry
 import com.jarvis.assistant.device.HyperOsSetupHelper
 import com.jarvis.assistant.ui.components.JarvisIcons
 import com.jarvis.assistant.ui.theme.JarvisPalette
+import com.jarvis.assistant.ui.viewmodel.VoiceprintUiState
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -80,6 +83,7 @@ enum class ActiveSettingsSheet {
     API_KEY,
     MODEL,
     VOICE,
+    WAKE_IDENTITY,
     SAFETY,
     ECOSYSTEM,
     ROUTINES,
@@ -98,11 +102,15 @@ fun JarvisSheetHost(
     auditLogs: List<AuditLogEntry>,
     protocols: List<JarvisProtocol> = emptyList(),
     reminders: List<JarvisReminder> = emptyList(),
+    voiceprintUi: VoiceprintUiState = VoiceprintUiState(),
     accent: Color,
     onDismiss: () -> Unit,
     onUpdateSettings: ((JarvisSettings) -> JarvisSettings) -> Unit,
     onTestVoice: (SpokenLanguage?) -> Unit,
     onRequestRuntimePermissions: () -> Unit,
+    onRecordVoiceprintSample: () -> Unit = {},
+    onTestVoiceprint: () -> Unit = {},
+    onClearVoiceprints: () -> Unit = {},
     onDeleteMemory: (Long) -> Unit,
     onDeleteProtocol: (Long) -> Unit = {},
     onCancelReminder: (Long) -> Unit = {},
@@ -129,6 +137,15 @@ fun JarvisSheetHost(
                 ActiveSettingsSheet.API_KEY -> ApiKeySheetContent(settings, accent, onUpdateSettings, onDismiss)
                 ActiveSettingsSheet.MODEL -> ModelPickerSheetContent(settings, accent, onUpdateSettings, onDismiss)
                 ActiveSettingsSheet.VOICE -> VoiceStudioSheetContent(settings, accent, onUpdateSettings, onTestVoice)
+                ActiveSettingsSheet.WAKE_IDENTITY -> WakeIdentitySheetContent(
+                    settings = settings,
+                    voiceprintUi = voiceprintUi,
+                    accent = accent,
+                    onUpdateSettings = onUpdateSettings,
+                    onRecordSample = onRecordVoiceprintSample,
+                    onTestVoiceprint = onTestVoiceprint,
+                    onClearVoiceprints = onClearVoiceprints
+                )
                 ActiveSettingsSheet.SAFETY -> SafetySheetContent(settings, accent, onUpdateSettings)
                 ActiveSettingsSheet.ECOSYSTEM -> EcosystemSheetContent(settings, accent, onUpdateSettings, onDismiss)
                 ActiveSettingsSheet.ROUTINES -> RoutinesSheetContent(protocols, reminders, onDeleteProtocol, onCancelReminder)
@@ -463,6 +480,197 @@ private fun VoiceStudioSheetContent(
         valueRange = 0.75f..1.20f,
         colors = SliderDefaults.colors(thumbColor = accent, activeTrackColor = accent, inactiveTrackColor = JarvisPalette.Elevated)
     )
+}
+
+@Composable
+private fun WakeIdentitySheetContent(
+    settings: JarvisSettings,
+    voiceprintUi: VoiceprintUiState,
+    accent: Color,
+    onUpdateSettings: ((JarvisSettings) -> JarvisSettings) -> Unit,
+    onRecordSample: () -> Unit,
+    onTestVoiceprint: () -> Unit,
+    onClearVoiceprints: () -> Unit
+) {
+    val enrolledCount = settings.enrolledVoiceprintCount()
+
+    SheetHeading("Wake word & voiceprint", "100% on-device ONNX wake word & biometric speaker verification.")
+    Spacer(Modifier.height(16.dp))
+
+    Text("Custom wake word", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = JarvisPalette.TextSecondary)
+    Spacer(Modifier.height(8.dp))
+    SheetGroupBox {
+        WakeWordModel.entries.forEachIndexed { idx, model ->
+            val selected = settings.wakeWordModel == model
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onUpdateSettings { it.copy(wakeWordModel = model) } }
+                    .padding(horizontal = 16.dp, vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "\"${model.displayName}\"",
+                        fontSize = 15.sp,
+                        fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+                        color = if (selected) accent else JarvisPalette.TextPrimary
+                    )
+                    Text(
+                        text = "Local openWakeWord neural detector",
+                        fontSize = 12.sp,
+                        color = JarvisPalette.TextSecondary
+                    )
+                }
+                if (selected) {
+                    Icon(JarvisIcons.Check, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+                }
+            }
+            if (idx < WakeWordModel.entries.lastIndex) SheetDivider()
+        }
+    }
+
+    Spacer(Modifier.height(18.dp))
+    Text("Voiceprint lock (SpeakerNet ONNX)", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = JarvisPalette.TextSecondary)
+    Spacer(Modifier.height(8.dp))
+
+    SheetGroupBox {
+        SheetToggleRow(
+            title = "Only obey my voice",
+            subtitle = if (enrolledCount > 0) {
+                "Ignores friends & YouTube videos ($enrolledCount/3 samples enrolled)"
+            } else {
+                "Enroll at least 1 voice sample below to activate"
+            },
+            checked = settings.voiceprintLockEnabled && enrolledCount > 0,
+            accent = accent,
+            onCheckedChange = { enabled ->
+                if (enabled && enrolledCount == 0) {
+                    onRecordSample()
+                } else {
+                    onUpdateSettings { it.copy(voiceprintLockEnabled = enabled) }
+                }
+            }
+        )
+    }
+
+    Spacer(Modifier.height(12.dp))
+    SegmentedRow(
+        options = VoiceprintSensitivity.entries,
+        selected = settings.voiceprintSensitivity,
+        labelOf = { it.displayName },
+        accent = accent,
+        onSelect = { sens -> onUpdateSettings { it.copy(voiceprintSensitivity = sens) } }
+    )
+    Spacer(Modifier.height(5.dp))
+    Text(
+        text = settings.voiceprintSensitivity.description,
+        fontSize = 12.sp,
+        color = JarvisPalette.TextSecondary
+    )
+
+    Spacer(Modifier.height(14.dp))
+    SheetGroupBox {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Voiceprint samples ($enrolledCount / 3)",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = JarvisPalette.TextPrimary
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    repeat(3) { i ->
+                        Box(
+                            modifier = Modifier
+                                .size(9.dp)
+                                .clip(CircleShape)
+                                .background(if (i < enrolledCount) JarvisPalette.Success else JarvisPalette.HairlineStrong)
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = voiceprintUi.statusMessage.ifBlank {
+                    "Tap Record and say \"${settings.wakeWordModel.displayName}, good evening\" in your normal voice."
+                },
+                fontSize = 12.5.sp,
+                color = when (voiceprintUi.lastTestPassed) {
+                    true -> JarvisPalette.Success
+                    false -> JarvisPalette.Warning
+                    null -> JarvisPalette.TextSecondary
+                }
+            )
+
+            if (voiceprintUi.isRecording) {
+                Spacer(Modifier.height(10.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(JarvisPalette.Graphite)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(voiceprintUi.rmsLevel.coerceIn(0.06f, 1f))
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(accent)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+            Button(
+                onClick = onRecordSample,
+                enabled = !voiceprintUi.isRecording,
+                colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = Color(0xFF0A0A0C)),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(46.dp)
+            ) {
+                Text(
+                    text = when {
+                        voiceprintUi.isRecording -> "Recording..."
+                        enrolledCount < 3 -> "Record sample ${enrolledCount + 1} of 3"
+                        else -> "Record fresh voice sample"
+                    },
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 14.sp
+                )
+            }
+
+            if (enrolledCount > 0) {
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(
+                        onClick = onTestVoiceprint,
+                        enabled = !voiceprintUi.isRecording
+                    ) {
+                        Text("Test my voice", color = accent, fontSize = 13.5.sp)
+                    }
+                    TextButton(
+                        onClick = onClearVoiceprints,
+                        enabled = !voiceprintUi.isRecording
+                    ) {
+                        Text("Erase voiceprint", color = JarvisPalette.Danger, fontSize = 13.5.sp)
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable

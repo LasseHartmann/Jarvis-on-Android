@@ -40,6 +40,7 @@ class MainActivity : ComponentActivity() {
             val auditLogs by viewModel.auditLogs.collectAsState()
             val protocols by viewModel.protocols.collectAsState()
             val reminders by viewModel.reminders.collectAsState()
+            val voiceprintUi by viewModel.voiceprintUi.collectAsState()
 
             StarkTheme(finish = settings.hudColorTheme) {
                 Scaffold(
@@ -53,9 +54,13 @@ class MainActivity : ComponentActivity() {
                         auditLogs = auditLogs,
                         protocols = protocols,
                         reminders = reminders,
+                        voiceprintUi = voiceprintUi,
                         onUpdateSettings = viewModel::updateSettings,
                         onTestVoice = viewModel::testVoiceSample,
                         onPermissionsUpdated = viewModel::refreshTelemetry,
+                        onRecordVoiceprintSample = viewModel::recordVoiceprintSample,
+                        onTestVoiceprint = viewModel::testVoiceprintMatch,
+                        onClearVoiceprints = viewModel::clearVoiceprints,
                         onDeleteMemory = viewModel::deleteMemory,
                         onDeleteProtocol = viewModel::deleteProtocol,
                         onCancelReminder = viewModel::cancelReminder,

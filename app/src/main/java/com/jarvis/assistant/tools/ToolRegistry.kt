@@ -38,11 +38,12 @@ class ToolRegistry(
             // Multimodal Vision (Screen & Rear Camera)
             AnalyzeScreenVisionTool(settingsProvider, prepareScreenForPilot),
             LookWithCameraTool(context, settingsProvider),
-            // Live Web Grounding, GPS & Weather
+            // Live Web Grounding, GPS, Weather & Public Transit
             LiveWebAnswerTool(settingsProvider),
             FetchWebpageTool(),
             GetCurrentLocationTool(context),
             GetWeatherTool(context),
+            GetPublicTransitTool(context, store, settingsProvider),
             // App, Navigation & Direct Media/Messaging
             ListInstalledAppsTool(appsRepo),
             OpenAppTool(appsRepo, prepareScreenForPilot),

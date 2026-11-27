@@ -207,5 +207,19 @@
         <receiver
             android:name=".services.JarvisReminderReceiver"
             android:exported="false" />
+
+        <!-- Minimalist Pure-Black AMOLED Stark HUD Home Screen Widget -->
+        <receiver
+            android:name=".widget.JarvisHudWidgetProvider"
+            android:exported="true"
+            android:label="J.A.R.V.I.S. HUD">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.jarvis.assistant.ACTION_REFRESH_HUD_WIDGET" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/jarvis_hud_widget_info" />
+        </receiver>
     </application>
 </manifest>

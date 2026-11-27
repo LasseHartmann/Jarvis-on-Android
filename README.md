@@ -29,17 +29,18 @@ irm https://raw.githubusercontent.com/LasseHartmann/Jarvis-on-Android/main/scrip
 
 ---
 
-## Highlights (Mark II · `v2.1.0`)
+## Highlights (Mark III · `v2.2.0`)
 
-- **144Hz Minimalist 3D Neural Wake Overlay & Local `"Hey Jarvis"` Wake Word**:
-  - Summon from any screen or lock screen by saying **"Hey Jarvis"** (100% local on-device **openWakeWord ONNX**, zero cloud audio) or holding the **Power Button** as your Default Digital Assistant.
-  - Renders a floating **3D Fibonacci neural particle sphere** over native Android frosted-glass blur, with three selectable minimalist finishes (**Amber**, **Frost**, **Mono**), and morphs into a click-through floating top status pill while piloting apps underneath.
+- **144Hz Minimalist 3D Neural Wake Overlay, Custom Wake Words & Voiceprint Lock**:
+  - Switch between **4 local on-device openWakeWord ONNX wake phrases**: **"Hey Jarvis"**, **"Jarvis"**, **"Hey Friday"**, or **"Computer"** (zero cloud audio), or hold the **Power Button** as your Default Digital Assistant.
+  - **Voiceprint Lock (Speaker Verification)**: On-device **NVIDIA NeMo SpeakerNet ONNX** 192-dim neural speaker verification (Keystore-encrypted 3-sample enrollment) so Jarvis obeys only *your* voice and ignores friends or YouTube videos.
+  - **Minimalist Pure-Black AMOLED Home Screen Widget**: Live battery/PC/Alexa status, active wake word & Voiceprint badge, next scheduled reminder, and a 1-tap glowing Voice Orb matching your chosen finish (**Amber**, **Frost**, **Mono**).
 - **Ultra-Low-Latency Streaming Bilingual Voice (English + Deutsch)**:
   - Native bilingual English & German speech recognition and automatic language-matched replies.
-  - Real-time SSE streaming from **Gemini 4** directly into pipelined **Gemini 3.8 Flash Lite TTS** (`Charon`, `Orus`, `Enceladus`) with stateful click-free **Stark Helmet Intercom Audio DSP** (~550ms time-to-first-audio).
-- **55 Native, Vision, Live-Web & Hardware Phone-Control Tools**:
+  - Real-time SSE streaming from **Gemini 4** directly into pipelined **Gemini 3.8 Flash Lite TTS** (`Charon`, `Orus`, `Enceladus`) with stateful click-free **Stark Helmet Intercom Audio DSP** (~550ms time-to-first-audio), including neural confirmation prompts.
+- **56 Native, Vision, Live-Transit, Alexa & Hardware Phone-Control Tools**:
   - **Multimodal Vision**: Screen Vision (`analyze_screen_vision` via Android 11+ `takeScreenshot` with banking/password guard) & headless rear-camera peek (`look_with_camera`) powered by Gemini 4 Vision.
-  - **Live Web, GPS & Weather**: Google Search Grounding (`live_web_answer` without opening Chrome), webpage reader (`fetch_webpage`), GPS/reverse-geocoding (`get_current_location`), and live + 3-day Open-Meteo weather (`get_weather`).
+  - **Live Web, Public Transit, GPS & Weather**: Google Search Grounding (`live_web_answer`), **Real-Time MVG Munich & Deutsche Bahn Public Transit** (`get_public_transit` with live delays, platforms, "when do I need to leave?" routing, and automatic departure reminders), webpage reader (`fetch_webpage`), GPS (`get_current_location`), and Open-Meteo weather (`get_weather`).
   - **Direct Navigation, Messaging & Media**: Dedicated Google Maps turn-by-turn navigation (`navigate_to`), one-step WhatsApp chat launcher (`send_whatsapp`), and instant Spotify / YouTube Music / YouTube playback (`play_music`).
   - **Proactive Butler**: Voice-created custom Stark Protocols (`create_protocol` / `delete_protocol`), scheduled spoken reminders & daily Morning Briefings (`schedule_reminder` / `list_reminders` / `cancel_reminder`), and hands-free **Bluetooth Notification Whisper** for incoming messages.
   - **Hardware & Ecosystem**: Built-in **Xiaomi 15T Pro IR Blaster** (`control_ir_device` for Samsung, LG, Sony, Philips, Hisense, Xiaomi, or custom raw signals), **Amazon Alexa** (`alexa_trigger_routine`, `alexa_announce` via Voice Monkey API v3/v2 or webhooks, plus zero-setup `alexa_app_command`), **Home Assistant** smart home control (`list_smart_home_entities` / `smart_home_control`), and a zero-dependency **Windows PC Bridge** (`pc_bridge_action` + `pc-bridge/start_jarvis_bridge.ps1`).

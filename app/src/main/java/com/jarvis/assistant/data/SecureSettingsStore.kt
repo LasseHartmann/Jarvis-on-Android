@@ -13,6 +13,8 @@ import com.jarvis.assistant.agent.JarvisSettings
 import com.jarvis.assistant.agent.JarvisVoiceProfile
 import com.jarvis.assistant.agent.PersonaStyle
 import com.jarvis.assistant.agent.SafetyMode
+import com.jarvis.assistant.agent.VoiceprintSensitivity
+import com.jarvis.assistant.agent.WakeWordModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -65,6 +67,20 @@ class SecureSettingsStore(context: Context) {
             )
         }.getOrDefault(JarvisLanguageMode.BILINGUAL_EN_DE)
 
+        val wakeWordModel = runCatching {
+            WakeWordModel.valueOf(
+                prefs.getString(KEY_WAKE_WORD_MODEL, WakeWordModel.HEY_JARVIS.name)
+                    ?: WakeWordModel.HEY_JARVIS.name
+            )
+        }.getOrDefault(WakeWordModel.HEY_JARVIS)
+
+        val voiceprintSensitivity = runCatching {
+            VoiceprintSensitivity.valueOf(
+                prefs.getString(KEY_VOICEPRINT_SENSITIVITY, VoiceprintSensitivity.BALANCED.name)
+                    ?: VoiceprintSensitivity.BALANCED.name
+            )
+        }.getOrDefault(VoiceprintSensitivity.BALANCED)
+
         return JarvisSettings(
             provider = provider,
             geminiApiKey = decryptSecret(prefs.getString(KEY_GEMINI_API_KEY, "") ?: ""),
@@ -91,6 +107,10 @@ class SecureSettingsStore(context: Context) {
             languageMode = languageMode,
             wakeWordEnabled = prefs.getBoolean(KEY_WAKE_WORD_ENABLED, true),
             wakeWordPauseScreenOff = prefs.getBoolean(KEY_WAKE_WORD_PAUSE_SCREEN_OFF, true),
+            wakeWordModel = wakeWordModel,
+            voiceprintLockEnabled = prefs.getBoolean(KEY_VOICEPRINT_LOCK_ENABLED, false),
+            voiceprintSensitivity = voiceprintSensitivity,
+            enrolledVoiceprintsJson = decryptSecret(prefs.getString(KEY_VOICEPRINT_DATA, "") ?: ""),
             bluetoothWhisperEnabled = prefs.getBoolean(KEY_BT_WHISPER, true),
             homeAssistantUrl = prefs.getString(KEY_HA_URL, "") ?: "",
             homeAssistantToken = decryptSecret(prefs.getString(KEY_HA_TOKEN, "") ?: ""),
@@ -129,6 +149,10 @@ class SecureSettingsStore(context: Context) {
             .putString(KEY_LANGUAGE_MODE, s.languageMode.name)
             .putBoolean(KEY_WAKE_WORD_ENABLED, s.wakeWordEnabled)
             .putBoolean(KEY_WAKE_WORD_PAUSE_SCREEN_OFF, s.wakeWordPauseScreenOff)
+            .putString(KEY_WAKE_WORD_MODEL, s.wakeWordModel.name)
+            .putBoolean(KEY_VOICEPRINT_LOCK_ENABLED, s.voiceprintLockEnabled)
+            .putString(KEY_VOICEPRINT_SENSITIVITY, s.voiceprintSensitivity.name)
+            .putString(KEY_VOICEPRINT_DATA, encryptSecret(s.enrolledVoiceprintsJson))
             .putBoolean(KEY_BT_WHISPER, s.bluetoothWhisperEnabled)
             .putString(KEY_HA_URL, s.homeAssistantUrl.trim())
             .putString(KEY_HA_TOKEN, encryptSecret(s.homeAssistantToken.trim()))
@@ -229,6 +253,10 @@ class SecureSettingsStore(context: Context) {
         private const val KEY_LANGUAGE_MODE = "language_mode"
         private const val KEY_WAKE_WORD_ENABLED = "wake_word_enabled"
         private const val KEY_WAKE_WORD_PAUSE_SCREEN_OFF = "wake_word_pause_screen_off"
+        private const val KEY_WAKE_WORD_MODEL = "wake_word_model"
+        private const val KEY_VOICEPRINT_LOCK_ENABLED = "voiceprint_lock_enabled"
+        private const val KEY_VOICEPRINT_SENSITIVITY = "voiceprint_sensitivity"
+        private const val KEY_VOICEPRINT_DATA = "voiceprint_data"
         private const val KEY_BT_WHISPER = "bluetooth_whisper_enabled"
         private const val KEY_HA_URL = "home_assistant_url"
         private const val KEY_HA_TOKEN = "home_assistant_token"
