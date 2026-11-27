@@ -74,7 +74,7 @@ class JarvisTaskCoordinator(
 
     private val exitAfterTools = setOf(
         "open_app", "navigate_to", "send_whatsapp", "play_music", "analyze_screen_vision",
-        "open_url", "web_search", "open_system_panel",
+        "alexa_app_command", "open_url", "web_search", "open_system_panel",
         "make_call", "global_action", "tap_element", "tap_coordinates", "type_text", "scroll_screen"
     )
 
@@ -276,12 +276,12 @@ class JarvisTaskCoordinator(
             overlay.onVoiceConfirmationPrompt(pending, lang)
             return
         }
-        // Headless voice-only confirmation while piloting an app underneath — instant on-device voice for zero cloud pause
+        // Headless voice-only confirmation while piloting an app underneath — uses neural Gemini J.A.R.V.I.S. voice
         val settings = settingsStore.current()
         val prompt = buildConfirmationPrompt(pending, settings.userTitle, lang)
         voiceEngine.speak(
             text = prompt,
-            options = buildSpeechOptions(settings, instantLocal = true, language = lang),
+            options = buildSpeechOptions(settings, instantLocal = false, language = lang),
             onFinished = {
                 if (orchestrator.pendingConfirmation.value == null) return@speak
                 soundEffects.play(StarkCue.WAKE)

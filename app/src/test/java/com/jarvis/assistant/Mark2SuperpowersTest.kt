@@ -4,9 +4,11 @@ import com.jarvis.assistant.agent.GeminiLlmClient
 import com.jarvis.assistant.agent.JarvisMemory
 import com.jarvis.assistant.agent.JarvisProtocol
 import com.jarvis.assistant.agent.JarvisReminder
+import com.jarvis.assistant.agent.LocalCommandRouter
 import com.jarvis.assistant.agent.RiskLevel
 import com.jarvis.assistant.assist.AmbientPillStateResolver
 import com.jarvis.assistant.data.JarvisStore
+import com.jarvis.assistant.tools.AlexaHelper
 import com.jarvis.assistant.tools.CreateProtocolTool
 import com.jarvis.assistant.tools.DeleteProtocolTool
 import com.jarvis.assistant.tools.FetchWebpageTool
@@ -156,7 +158,47 @@ class Mark2SuperpowersTest {
         assertEquals("Starting music", AmbientPillStateResolver.humanizeActionLabel("play_music"))
         assertEquals("IR blaster", AmbientPillStateResolver.humanizeActionLabel("control_ir_device"))
         assertEquals("Smart home", AmbientPillStateResolver.humanizeActionLabel("smart_home_control"))
+        assertEquals("Amazon Alexa", AmbientPillStateResolver.humanizeActionLabel("alexa_trigger_routine"))
         assertEquals("PC bridge", AmbientPillStateResolver.humanizeActionLabel("pc_bridge_action"))
+    }
+
+    @Test
+    fun localRouterDoesNotHijackPcUrlsOrAlexaCommands() {
+        assertNull(LocalCommandRouter.match("open youtube.com on my pc"))
+        assertNull(LocalCommandRouter.match("öffne youtube.com auf meinem pc"))
+        assertNull(LocalCommandRouter.match("open youtube.com"))
+        assertNull(LocalCommandRouter.match("open reddit.com"))
+        assertNull(LocalCommandRouter.match("tell alexa to turn on the living room lights"))
+        assertNull(LocalCommandRouter.match("turn off the samsung tv"))
+        assertNull(LocalCommandRouter.match("lock my pc"))
+
+        // Plain app launches still stay fast offline
+        val spotify = LocalCommandRouter.match("open spotify")
+        assertNotNull(spotify)
+        assertEquals("open_app", spotify!!.toolCalls.first().name)
+        assertEquals("spotify", spotify.toolCalls.first().arguments.getString("app_name"))
+
+        val whatsapp = LocalCommandRouter.match("öffne whatsapp")
+        assertNotNull(whatsapp)
+        assertEquals("open_app", whatsapp!!.toolCalls.first().name)
+    }
+
+    @Test
+    fun alexaHelpersFormatWebhooksAndVoiceMonkeyPayloads() {
+        val url = AlexaHelper.resolveWebhookUrl("https://hook.example.com/trigger/{routine}", "movie night")
+        assertEquals("https://hook.example.com/trigger/movie+night", url)
+
+        val trig = AlexaHelper.buildVoiceMonkeyTriggerBody("tok123", "living-room-lights")
+        assertEquals("tok123", trig.getString("token"))
+        assertEquals("living-room-lights", trig.getString("device"))
+
+        val v3 = AlexaHelper.buildVoiceMonkeyAnnounceBody("tok123", "kitchen-echo", "Dinner is ready", v2 = false)
+        assertEquals("Dinner is ready", v3.getString("speech"))
+        assertFalse(v3.has("text"))
+
+        val v2 = AlexaHelper.buildVoiceMonkeyAnnounceBody("tok123", "kitchen-echo", "Dinner is ready", v2 = true)
+        assertEquals("Dinner is ready", v2.getString("text"))
+        assertFalse(v2.has("speech"))
     }
 
     private class InMemoryMark2Store : JarvisStore {

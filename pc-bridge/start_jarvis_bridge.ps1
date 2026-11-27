@@ -19,19 +19,27 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BridgePy = Join-Path $ScriptDir "jarvis_pc_bridge.py"
 
 if ($AddFirewallRule) {
-    $ruleName = "Jarvis PC Bridge (TCP $Port)"
-    $existing = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
-    if (-not $existing) {
-        New-NetFirewallRule `
-            -DisplayName $ruleName `
-            -Direction Inbound `
-            -Protocol TCP `
-            -LocalPort $Port `
-            -Profile Private `
-            -Action Allow | Out-Null
-        Write-Host "Added Windows Firewall rule '$ruleName' (Private networks)." -ForegroundColor Green
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator
+    )
+    if (-not $isAdmin) {
+        Write-Warning "Skipping firewall rule creation: PowerShell is not running as Administrator. Re-run in an elevated PowerShell if your phone cannot connect on Private networks."
     } else {
-        Write-Host "Windows Firewall rule '$ruleName' already exists." -ForegroundColor Cyan
+        $ruleName = "Jarvis PC Bridge (TCP $Port)"
+        $existing = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
+        if (-not $existing) {
+            New-NetFirewallRule `
+                -DisplayName $ruleName `
+                -Direction Inbound `
+                -Protocol TCP `
+                -LocalPort $Port `
+                -Profile Private `
+                -Action Allow `
+                -ErrorAction Stop | Out-Null
+            Write-Host "Added Windows Firewall rule '$ruleName' (Private networks)." -ForegroundColor Green
+        } else {
+            Write-Host "Windows Firewall rule '$ruleName' already exists." -ForegroundColor Cyan
+        }
     }
 }
 

@@ -11,8 +11,8 @@ android {
         }
     }
 
-    val releaseVersionName = (findProperty("jarvisVersionName") as? String)?.trim().orEmpty().ifBlank { "2.0.0" }
-    val releaseVersionCode = (findProperty("jarvisVersionCode") as? String)?.toIntOrNull() ?: 10
+    val releaseVersionName = (findProperty("jarvisVersionName") as? String)?.trim().orEmpty().ifBlank { "2.1.0" }
+    val releaseVersionCode = (findProperty("jarvisVersionCode") as? String)?.toIntOrNull() ?: 11
 
     defaultConfig {
         applicationId = "com.jarvis.assistant"

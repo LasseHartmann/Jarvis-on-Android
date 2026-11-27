@@ -254,7 +254,10 @@ data class JarvisSettings(
     val homeAssistantUrl: String = "",
     val homeAssistantToken: String = "",
     val pcBridgeUrl: String = "",
-    val pcBridgeToken: String = ""
+    val pcBridgeToken: String = "",
+    val alexaVoiceMonkeyToken: String = "",
+    val alexaDefaultDevice: String = "",
+    val alexaWebhookUrl: String = ""
 ) {
     fun hasActiveCloudKey(): Boolean = when (provider) {
         AiProvider.GEMINI -> geminiApiKey.isNotBlank()

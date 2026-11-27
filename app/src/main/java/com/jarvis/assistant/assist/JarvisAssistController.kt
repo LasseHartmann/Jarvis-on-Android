@@ -192,7 +192,7 @@ class JarvisAssistController(
         val promptSpeech = container.taskCoordinator.buildConfirmationPrompt(pending, settings.userTitle, language)
         container.voiceEngine.speak(
             text = promptSpeech,
-            options = container.taskCoordinator.buildSpeechOptions(settings, instantLocal = true, language = language),
+            options = container.taskCoordinator.buildSpeechOptions(settings, instantLocal = false, language = language),
             onFinished = {
                 if (!visible || container.orchestrator.pendingConfirmation.value == null) return@speak
                 container.soundEffects.play(StarkCue.WAKE)

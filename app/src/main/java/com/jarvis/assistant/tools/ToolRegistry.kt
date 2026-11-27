@@ -77,10 +77,13 @@ class ToolRegistry(
             ClipboardTool(context),
             // Suit Diagnostics
             GetDeviceDiagnosticsTool(telemetryMonitor),
-            // Hardware IR Blaster & Smart Home / PC Ecosystem
+            // Hardware IR Blaster & Smart Home / Alexa / PC Ecosystem
             ControlIrDeviceTool(context),
             ListSmartHomeEntitiesTool(settingsProvider),
             SmartHomeControlTool(settingsProvider),
+            AlexaTriggerRoutineTool(settingsProvider),
+            AlexaAnnounceTool(settingsProvider),
+            AlexaAppCommandTool(context, prepareScreenForPilot),
             PcBridgeActionTool(settingsProvider),
             // Memory & Stark Protocols
             RememberFactTool(store),

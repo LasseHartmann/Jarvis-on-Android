@@ -95,7 +95,10 @@ class SecureSettingsStore(context: Context) {
             homeAssistantUrl = prefs.getString(KEY_HA_URL, "") ?: "",
             homeAssistantToken = decryptSecret(prefs.getString(KEY_HA_TOKEN, "") ?: ""),
             pcBridgeUrl = prefs.getString(KEY_PC_BRIDGE_URL, "") ?: "",
-            pcBridgeToken = decryptSecret(prefs.getString(KEY_PC_BRIDGE_TOKEN, "") ?: "")
+            pcBridgeToken = decryptSecret(prefs.getString(KEY_PC_BRIDGE_TOKEN, "") ?: ""),
+            alexaVoiceMonkeyToken = decryptSecret(prefs.getString(KEY_ALEXA_VM_TOKEN, "") ?: ""),
+            alexaDefaultDevice = prefs.getString(KEY_ALEXA_DEFAULT_DEVICE, "") ?: "",
+            alexaWebhookUrl = prefs.getString(KEY_ALEXA_WEBHOOK_URL, "") ?: ""
         )
     }
 
@@ -131,6 +134,9 @@ class SecureSettingsStore(context: Context) {
             .putString(KEY_HA_TOKEN, encryptSecret(s.homeAssistantToken.trim()))
             .putString(KEY_PC_BRIDGE_URL, s.pcBridgeUrl.trim())
             .putString(KEY_PC_BRIDGE_TOKEN, encryptSecret(s.pcBridgeToken.trim()))
+            .putString(KEY_ALEXA_VM_TOKEN, encryptSecret(s.alexaVoiceMonkeyToken.trim()))
+            .putString(KEY_ALEXA_DEFAULT_DEVICE, s.alexaDefaultDevice.trim())
+            .putString(KEY_ALEXA_WEBHOOK_URL, s.alexaWebhookUrl.trim())
             .apply()
     }
 
@@ -228,5 +234,8 @@ class SecureSettingsStore(context: Context) {
         private const val KEY_HA_TOKEN = "home_assistant_token"
         private const val KEY_PC_BRIDGE_URL = "pc_bridge_url"
         private const val KEY_PC_BRIDGE_TOKEN = "pc_bridge_token"
+        private const val KEY_ALEXA_VM_TOKEN = "alexa_vm_token"
+        private const val KEY_ALEXA_DEFAULT_DEVICE = "alexa_default_device"
+        private const val KEY_ALEXA_WEBHOOK_URL = "alexa_webhook_url"
     }
 }

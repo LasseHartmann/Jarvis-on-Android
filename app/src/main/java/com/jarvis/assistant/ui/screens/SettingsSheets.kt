@@ -546,11 +546,52 @@ private fun EcosystemSheetContent(
     onDone: () -> Unit
 ) {
     var revealHa by remember { mutableStateOf(false) }
+    var revealAlexa by remember { mutableStateOf(false) }
     var revealPc by remember { mutableStateOf(false) }
 
-    SheetHeading("Ecosystem & integrations", "Connect Home Assistant, your Windows PC, and IR hardware.")
+    SheetHeading("Ecosystem & integrations", "Connect Amazon Alexa, Home Assistant, your Windows PC, and IR hardware.")
     Spacer(Modifier.height(16.dp))
 
+    Text("Amazon Alexa", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = JarvisPalette.TextSecondary)
+    Spacer(Modifier.height(4.dp))
+    Text(
+        text = "For silent background routines & Echo announcements, link a free Voice Monkey (voicemonkey.io) token or any routine webhook — or leave blank to pilot the Alexa Android app directly.",
+        fontSize = 12.sp,
+        color = JarvisPalette.TextSecondary
+    )
+    Spacer(Modifier.height(8.dp))
+    MinimalTextField(
+        value = settings.alexaVoiceMonkeyToken,
+        onValueChange = { v -> onUpdateSettings { it.copy(alexaVoiceMonkeyToken = v) } },
+        label = "Voice Monkey API Token (optional)",
+        placeholder = "Paste Voice Monkey token",
+        secret = !revealAlexa,
+        trailing = {
+            IconButton(onClick = { revealAlexa = !revealAlexa }) {
+                Icon(
+                    if (revealAlexa) JarvisIcons.EyeOff else JarvisIcons.Eye,
+                    contentDescription = "Toggle visibility",
+                    tint = JarvisPalette.TextSecondary
+                )
+            }
+        }
+    )
+    Spacer(Modifier.height(10.dp))
+    MinimalTextField(
+        value = settings.alexaDefaultDevice,
+        onValueChange = { v -> onUpdateSettings { it.copy(alexaDefaultDevice = v) } },
+        label = "Default Alexa Device / Trigger ID",
+        placeholder = "e.g. living-room-echo"
+    )
+    Spacer(Modifier.height(10.dp))
+    MinimalTextField(
+        value = settings.alexaWebhookUrl,
+        onValueChange = { v -> onUpdateSettings { it.copy(alexaWebhookUrl = v) } },
+        label = "Custom Routine Webhook URL (optional)",
+        placeholder = "https://... (IFTTT / Virtual Smart Home)"
+    )
+
+    Spacer(Modifier.height(18.dp))
     Text("Home Assistant", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = JarvisPalette.TextSecondary)
     Spacer(Modifier.height(8.dp))
     MinimalTextField(

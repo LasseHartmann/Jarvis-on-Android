@@ -81,6 +81,7 @@ object AmbientPillStateResolver {
             lower.contains("play_music") -> "Starting music"
             lower.contains("control_ir_device") -> "IR blaster"
             lower.contains("smart_home") -> "Smart home"
+            lower.contains("alexa") -> "Amazon Alexa"
             lower.contains("pc_bridge") -> "PC bridge"
             lower.contains("protocol") -> "Updating routine"
             lower.contains("reminder") -> "Scheduling"

@@ -29,11 +29,12 @@ object LocalCommandRouter {
         // Built-in offline protocols work in both English & German
         matchBuiltInProtocolOffline(lower, de)?.let { return it }
 
-        // Do not intercept multi-clause requests in English or German — escalate to the LLM agent loop
+        // Do not intercept multi-clause, remote-device, or ecosystem requests — escalate to Gemini 4
         if (lower.contains(" and ") ||
             lower.contains(" then ") ||
             lower.contains(" und ") ||
             lower.contains(" dann ") ||
+            isRemoteOrEcosystemCommand(lower) ||
             (lower.contains("?") && !isSimpleStatusQuestion(lower))
         ) {
             return null
@@ -256,10 +257,23 @@ object LocalCommandRouter {
         }
 
         // 10. Open App (EN + DE: "open spotify", "öffne whatsapp", "starte kamera")
-        val openMatch = Regex("^(?:open|launch|start|öffne|oeffne|starte) ([a-z0-9äöüß ._+&-]{2,40})$").find(lower)
+        // Never hijack URLs/domains (youtube.com), prepositional phrases ("open X on Y"), or multi-word requests.
+        val openMatch = Regex("^(?:open|launch|start|öffne|oeffne|starte) ([a-z0-9äöüß _+&-]{2,32})$").find(lower)
         if (openMatch != null) {
             val appName = openMatch.groupValues[1].trim()
-            if (appName !in setOf("notifications", "quick settings", "benachrichtigungen", "schnelleinstellungen")) {
+            val words = appName.split(Regex("\\s+"))
+            val excludedTargets = setOf("notifications", "quick settings", "benachrichtigungen", "schnelleinstellungen")
+            val blockedPhrases = listOf(
+                " on ", " in ", " to ", " for ", " with ", " from ",
+                " auf ", " am ", " im ", " zu ", " mit ", " für ",
+                "http", "www", "navigation", "directions", "route"
+            )
+            val startsWithArticle = words.firstOrNull() in setOf("a", "an", "the", "my", "ein", "eine", "den", "die", "das", "mein", "meine")
+            if (appName !in excludedTargets &&
+                words.size <= 3 &&
+                !startsWithArticle &&
+                blockedPhrases.none { appName.contains(it) }
+            ) {
                 return single("open_app", JSONObject().put("app_name", appName)) { res, title ->
                     if (res.success) {
                         val clean = res.output.substringBefore("\n\nCURRENT SCREEN:").trim()
@@ -363,6 +377,20 @@ object LocalCommandRouter {
             )
 
             else -> null
+        }
+    }
+
+    private fun isRemoteOrEcosystemCommand(lower: String): Boolean {
+        val keywords = listOf(
+            "on my pc", "on pc", "my pc", "on the pc", "to my pc",
+            "on my computer", "my computer", "auf meinem pc", "am pc", "auf dem pc", "meinen pc",
+            "computer", "rechner", "desktop",
+            "alexa", "echo", "smart home", "home assistant",
+            "tv", "fernseher", "samsung", "sony", "philips", "hisense",
+            "living room", "bedroom", "kitchen", "office", "wohnzimmer", "schlafzimmer", "küche", "lampe", "lichter", "lights"
+        )
+        return keywords.any { kw ->
+            Regex("(^|\\b)${Regex.escape(kw)}(\\b|$)").containsMatchIn(lower)
         }
     }
 

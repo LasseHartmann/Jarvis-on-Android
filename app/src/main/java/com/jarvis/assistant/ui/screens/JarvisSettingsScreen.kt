@@ -294,13 +294,14 @@ fun JarvisSettingsScreen(
         // GROUP 3: PROACTIVE & ECOSYSTEM
         item {
             val haConfigured = settings.homeAssistantUrl.isNotBlank() && settings.homeAssistantToken.isNotBlank()
+            val alexaConfigured = settings.alexaVoiceMonkeyToken.isNotBlank() || settings.alexaWebhookUrl.isNotBlank()
             val pcConfigured = settings.pcBridgeUrl.isNotBlank() && settings.pcBridgeToken.isNotBlank()
-            val ecosystemLabel = when {
-                haConfigured && pcConfigured -> "HA · PC"
-                haConfigured -> "Home Assistant"
-                pcConfigured -> "PC Bridge"
-                else -> "Configure"
+            val connectedParts = buildList {
+                if (haConfigured) add("HA")
+                if (alexaConfigured) add("Alexa")
+                if (pcConfigured) add("PC")
             }
+            val ecosystemLabel = if (connectedParts.isEmpty()) "Configure" else connectedParts.joinToString(" · ")
             SettingsGroup(title = "Proactive & ecosystem") {
                 ToggleRow(
                     icon = JarvisIcons.Speaker,
@@ -314,7 +315,7 @@ fun JarvisSettingsScreen(
                     icon = JarvisIcons.Sliders,
                     title = "Ecosystem & integrations",
                     value = ecosystemLabel,
-                    valueColor = if (haConfigured || pcConfigured) JarvisPalette.Success else JarvisPalette.TextSecondary,
+                    valueColor = if (connectedParts.isNotEmpty()) JarvisPalette.Success else JarvisPalette.TextSecondary,
                     onClick = { activeSheet = ActiveSettingsSheet.ECOSYSTEM }
                 )
                 GroupDivider()
