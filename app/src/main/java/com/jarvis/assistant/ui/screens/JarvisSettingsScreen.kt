@@ -288,6 +288,14 @@ fun JarvisSettingsScreen(
                 )
                 GroupDivider()
                 ToggleRow(
+                    icon = JarvisIcons.Eye,
+                    title = "Show live text",
+                    checked = settings.showOverlayCaptions,
+                    accent = accent,
+                    onCheckedChange = { v -> onUpdateSettings { it.copy(showOverlayCaptions = v) } }
+                )
+                GroupDivider()
+                ToggleRow(
                     icon = JarvisIcons.Sliders,
                     title = "Hands-free follow-up",
                     checked = settings.continuousConversation,

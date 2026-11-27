@@ -294,6 +294,7 @@ data class JarvisSettings(
     val maxAgentSteps: Int = 10,
     val continuousConversation: Boolean = true,
     val autoDismissAfterReply: Boolean = true,
+    val showOverlayCaptions: Boolean = false,
     val languageMode: JarvisLanguageMode = JarvisLanguageMode.BILINGUAL_EN_DE,
     val wakeWordEnabled: Boolean = true,
     val wakeWordPauseScreenOff: Boolean = true,

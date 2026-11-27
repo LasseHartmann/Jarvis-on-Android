@@ -87,6 +87,7 @@ class JarvisAssistController(
 
         val settings = container.settingsStore.current()
         overlayView.configureTheme(settings.hudColorTheme)
+        overlayView.setShowCaptions(settings.showOverlayCaptions)
         overlayView.onCoreTap = ::handleCoreTap
         overlayView.onBackdropTap = ::dismissAndAbort
 

@@ -39,6 +39,7 @@ class StarkAssistOverlayView(context: Context) : View(context), Choreographer.Fr
     private var targetRms: Float = 0f
     private var smoothRms: Float = 0f
     private var pilotMode: Boolean = false
+    private var showCaptions: Boolean = false
     private var statusTag: String = "Listening"
     private var primaryCaption: String = ""
     private var secondaryCaption: String = ""
@@ -143,6 +144,11 @@ class StarkAssistOverlayView(context: Context) : View(context), Choreographer.Fr
 
     fun configureTheme(newTheme: HudColorTheme) {
         theme = newTheme
+        invalidate()
+    }
+
+    fun setShowCaptions(enabled: Boolean) {
+        showCaptions = enabled
         invalidate()
     }
 
@@ -543,7 +549,9 @@ class StarkAssistOverlayView(context: Context) : View(context), Choreographer.Fr
         val statusY = (cy + sphereR * 1.24f + 16f * density).coerceAtMost(h - 24f * density)
         canvas.drawText(statusTag, cx, statusY, statusLabelPaint)
 
-        // Minimalist floating spoken captions above the sphere
+        // Minimalist floating spoken captions above the sphere (hidden by default unless enabled in Settings)
+        if (!showCaptions && state != JarvisState.ERROR) return
+
         val textW = (w * 0.80f).toInt().coerceAtLeast(120)
         val anchorY = cy - sphereR * 1.32f - 18f * density
 
