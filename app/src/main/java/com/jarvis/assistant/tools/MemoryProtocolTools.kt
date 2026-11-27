@@ -89,3 +89,55 @@ class ListProtocolsTool(private val store: JarvisStore) : JarvisTool {
         return ToolExecutionOutput(true, text)
     }
 }
+
+class CreateProtocolTool(private val store: JarvisStore) : JarvisTool {
+    override val spec = ToolSpec(
+        name = "create_protocol",
+        description = "Create or update a custom voice-triggered Stark Protocol / macro routine (e.g. 'Gym Mode' that sets volume to 80%, enables DND, and plays workout music on Spotify). Once saved, saying the trigger phrase executes the full sequence.",
+        params = listOf(
+            ToolParam("name", "string", "Display name of the routine (e.g. 'Gym Mode', 'Drive Mode').", required = true),
+            ToolParam("trigger_phrase", "string", "Short voice phrase to activate it (e.g. 'gym mode', 'sportmodus').", required = true),
+            ToolParam("description", "string", "Short summary of what the routine does.", required = true),
+            ToolParam("command_prompt", "string", "Detailed multi-step instruction Jarvis will execute when triggered.", required = true)
+        ),
+        defaultRisk = RiskLevel.SAFE
+    )
+
+    override suspend fun execute(args: JSONObject): ToolExecutionOutput {
+        val name = args.optString("name", "").trim()
+        val trigger = args.optString("trigger_phrase", "").trim().lowercase()
+        val desc = args.optString("description", "").trim()
+        val prompt = args.optString("command_prompt", "").trim()
+        if (name.isBlank() || trigger.isBlank() || prompt.isBlank()) {
+            return ToolExecutionOutput(false, "name, trigger_phrase, and command_prompt are required.")
+        }
+        store.addCustomProtocol(
+            name = name,
+            triggerPhrase = trigger,
+            description = desc.ifBlank { prompt.take(120) },
+            commandPrompt = prompt
+        )
+        return ToolExecutionOutput(true, "Saved custom protocol '$name' (trigger: '$trigger').")
+    }
+}
+
+class DeleteProtocolTool(private val store: JarvisStore) : JarvisTool {
+    override val spec = ToolSpec(
+        name = "delete_protocol",
+        description = "Delete a user-created custom Stark Protocol by its name or trigger phrase.",
+        params = listOf(
+            ToolParam("name", "string", "Protocol name or trigger phrase to delete.", required = true)
+        ),
+        defaultRisk = RiskLevel.SAFE
+    )
+
+    override suspend fun execute(args: JSONObject): ToolExecutionOutput {
+        val name = args.optString("name", "").trim()
+        if (name.isBlank()) return ToolExecutionOutput(false, "Protocol name is required.")
+        val deleted = store.deleteProtocolByName(name)
+        return ToolExecutionOutput(
+            deleted,
+            if (deleted) "Deleted custom protocol '$name'." else "No custom protocol found matching '$name' (built-in protocols cannot be deleted)."
+        )
+    }
+}

@@ -59,6 +59,8 @@ import com.jarvis.assistant.agent.AuditLogEntry
 import com.jarvis.assistant.agent.GeminiModel
 import com.jarvis.assistant.agent.JarvisLanguageMode
 import com.jarvis.assistant.agent.JarvisMemory
+import com.jarvis.assistant.agent.JarvisProtocol
+import com.jarvis.assistant.agent.JarvisReminder
 import com.jarvis.assistant.agent.JarvisSettings
 import com.jarvis.assistant.agent.JarvisVoiceProfile
 import com.jarvis.assistant.agent.PersonaStyle
@@ -79,6 +81,8 @@ enum class ActiveSettingsSheet {
     MODEL,
     VOICE,
     SAFETY,
+    ECOSYSTEM,
+    ROUTINES,
     PERMISSIONS,
     MEMORY,
     ACTIVITY
@@ -92,12 +96,16 @@ fun JarvisSheetHost(
     telemetry: DeviceTelemetry,
     memories: List<JarvisMemory>,
     auditLogs: List<AuditLogEntry>,
+    protocols: List<JarvisProtocol> = emptyList(),
+    reminders: List<JarvisReminder> = emptyList(),
     accent: Color,
     onDismiss: () -> Unit,
     onUpdateSettings: ((JarvisSettings) -> JarvisSettings) -> Unit,
     onTestVoice: (SpokenLanguage?) -> Unit,
     onRequestRuntimePermissions: () -> Unit,
     onDeleteMemory: (Long) -> Unit,
+    onDeleteProtocol: (Long) -> Unit = {},
+    onCancelReminder: (Long) -> Unit = {},
     onClearAuditLogs: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -122,6 +130,8 @@ fun JarvisSheetHost(
                 ActiveSettingsSheet.MODEL -> ModelPickerSheetContent(settings, accent, onUpdateSettings, onDismiss)
                 ActiveSettingsSheet.VOICE -> VoiceStudioSheetContent(settings, accent, onUpdateSettings, onTestVoice)
                 ActiveSettingsSheet.SAFETY -> SafetySheetContent(settings, accent, onUpdateSettings)
+                ActiveSettingsSheet.ECOSYSTEM -> EcosystemSheetContent(settings, accent, onUpdateSettings, onDismiss)
+                ActiveSettingsSheet.ROUTINES -> RoutinesSheetContent(protocols, reminders, onDeleteProtocol, onCancelReminder)
                 ActiveSettingsSheet.PERMISSIONS -> PermissionsSheetContent(telemetry, accent, onRequestRuntimePermissions)
                 ActiveSettingsSheet.MEMORY -> MemorySheetContent(memories, onDeleteMemory)
                 ActiveSettingsSheet.ACTIVITY -> ActivitySheetContent(auditLogs, onClearAuditLogs)
@@ -529,6 +539,196 @@ private fun SafetySheetContent(
 }
 
 @Composable
+private fun EcosystemSheetContent(
+    settings: JarvisSettings,
+    accent: Color,
+    onUpdateSettings: ((JarvisSettings) -> JarvisSettings) -> Unit,
+    onDone: () -> Unit
+) {
+    var revealHa by remember { mutableStateOf(false) }
+    var revealPc by remember { mutableStateOf(false) }
+
+    SheetHeading("Ecosystem & integrations", "Connect Home Assistant, your Windows PC, and IR hardware.")
+    Spacer(Modifier.height(16.dp))
+
+    Text("Home Assistant", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = JarvisPalette.TextSecondary)
+    Spacer(Modifier.height(8.dp))
+    MinimalTextField(
+        value = settings.homeAssistantUrl,
+        onValueChange = { v -> onUpdateSettings { it.copy(homeAssistantUrl = v) } },
+        label = "Server URL",
+        placeholder = "http://homeassistant.local:8123"
+    )
+    Spacer(Modifier.height(10.dp))
+    MinimalTextField(
+        value = settings.homeAssistantToken,
+        onValueChange = { v -> onUpdateSettings { it.copy(homeAssistantToken = v) } },
+        label = "Long-Lived Access Token",
+        placeholder = "eyJhbGciOi...",
+        secret = !revealHa,
+        trailing = {
+            IconButton(onClick = { revealHa = !revealHa }) {
+                Icon(
+                    if (revealHa) JarvisIcons.EyeOff else JarvisIcons.Eye,
+                    contentDescription = "Toggle visibility",
+                    tint = JarvisPalette.TextSecondary
+                )
+            }
+        }
+    )
+
+    Spacer(Modifier.height(18.dp))
+    Text("Windows PC Bridge", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = JarvisPalette.TextSecondary)
+    Spacer(Modifier.height(4.dp))
+    Text(
+        text = "Run pc-bridge/start_jarvis_bridge.ps1 on your PC and paste the printed LAN URL and token.",
+        fontSize = 12.sp,
+        color = JarvisPalette.TextSecondary
+    )
+    Spacer(Modifier.height(8.dp))
+    MinimalTextField(
+        value = settings.pcBridgeUrl,
+        onValueChange = { v -> onUpdateSettings { it.copy(pcBridgeUrl = v) } },
+        label = "PC Bridge URL",
+        placeholder = "http://192.168.1.50:8765"
+    )
+    Spacer(Modifier.height(10.dp))
+    MinimalTextField(
+        value = settings.pcBridgeToken,
+        onValueChange = { v -> onUpdateSettings { it.copy(pcBridgeToken = v) } },
+        label = "PC Bridge Token",
+        placeholder = "Paste bearer token",
+        secret = !revealPc,
+        trailing = {
+            IconButton(onClick = { revealPc = !revealPc }) {
+                Icon(
+                    if (revealPc) JarvisIcons.EyeOff else JarvisIcons.Eye,
+                    contentDescription = "Toggle visibility",
+                    tint = JarvisPalette.TextSecondary
+                )
+            }
+        }
+    )
+
+    Spacer(Modifier.height(16.dp))
+    SheetGroupBox {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Text("Xiaomi 15T Pro IR Blaster", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = JarvisPalette.TextPrimary)
+            Spacer(Modifier.height(3.dp))
+            Text(
+                text = "Built-in hardware IR emitter is ready automatically. Try saying \"Turn off the Samsung TV\" or \"Mute the LG TV\".",
+                fontSize = 12.sp,
+                color = JarvisPalette.TextSecondary
+            )
+        }
+    }
+
+    Spacer(Modifier.height(20.dp))
+    Button(
+        onClick = onDone,
+        colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = Color(0xFF0A0A0C)),
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(48.dp)
+    ) {
+        Text("Done", fontWeight = FontWeight.Medium, fontSize = 15.sp)
+    }
+}
+
+@Composable
+private fun RoutinesSheetContent(
+    protocols: List<JarvisProtocol>,
+    reminders: List<JarvisReminder>,
+    onDeleteProtocol: (Long) -> Unit,
+    onCancelReminder: (Long) -> Unit
+) {
+    val fmt = remember { SimpleDateFormat("EEE, MMM d · HH:mm", Locale.getDefault()) }
+
+    SheetHeading("Routines & reminders", "Scheduled spoken reminders, briefings, and Stark Protocols.")
+    Spacer(Modifier.height(16.dp))
+
+    Text("Scheduled reminders & briefings", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = JarvisPalette.TextSecondary)
+    Spacer(Modifier.height(8.dp))
+    if (reminders.isEmpty()) {
+        Text(
+            text = "No active reminders. Try saying \"Remind me in 20 minutes to check the oven\" or \"Schedule a daily morning briefing at 7:30\".",
+            fontSize = 13.sp,
+            color = JarvisPalette.TextSecondary
+        )
+    } else {
+        SheetGroupBox {
+            reminders.forEachIndexed { idx, r ->
+                val tags = buildList {
+                    if (r.isBriefing) add("Briefing")
+                    if (r.repeatDaily) add("Daily")
+                }.joinToString(" · ")
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(r.title, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = JarvisPalette.TextPrimary)
+                        Text(
+                            text = buildString {
+                                append(fmt.format(Date(r.triggerAtMs)))
+                                if (tags.isNotBlank()) append("  ·  $tags")
+                            },
+                            fontSize = 12.sp,
+                            color = JarvisPalette.TextSecondary
+                        )
+                    }
+                    IconButton(onClick = { onCancelReminder(r.id) }, modifier = Modifier.size(34.dp)) {
+                        Icon(JarvisIcons.Trash, contentDescription = "Cancel", tint = JarvisPalette.TextSecondary, modifier = Modifier.size(18.dp))
+                    }
+                }
+                if (idx < reminders.lastIndex) SheetDivider()
+            }
+        }
+    }
+
+    Spacer(Modifier.height(18.dp))
+    Text("Stark Protocols", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = JarvisPalette.TextSecondary)
+    Spacer(Modifier.height(8.dp))
+    if (protocols.isEmpty()) {
+        Text(
+            text = "Ask Jarvis by voice to create custom routines like \"Create a Gym Mode protocol\".",
+            fontSize = 13.sp,
+            color = JarvisPalette.TextSecondary
+        )
+    } else {
+        SheetGroupBox {
+            protocols.forEachIndexed { idx, p ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(p.name, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = JarvisPalette.TextPrimary)
+                        Text(
+                            text = "\"${p.triggerPhrase}\" · ${p.description}",
+                            fontSize = 12.sp,
+                            color = JarvisPalette.TextSecondary,
+                            maxLines = 2
+                        )
+                    }
+                    if (!p.isBuiltIn) {
+                        IconButton(onClick = { onDeleteProtocol(p.id) }, modifier = Modifier.size(34.dp)) {
+                            Icon(JarvisIcons.Trash, contentDescription = "Delete", tint = JarvisPalette.TextSecondary, modifier = Modifier.size(18.dp))
+                        }
+                    }
+                }
+                if (idx < protocols.lastIndex) SheetDivider()
+            }
+        }
+    }
+}
+
+@Composable
 private fun PermissionsSheetContent(
     telemetry: DeviceTelemetry,
     accent: Color,
@@ -547,7 +747,20 @@ private fun PermissionsSheetContent(
             .fillMaxWidth()
             .height(46.dp)
     ) {
-        Text("Grant voice, contacts, call & calendar access", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+        Text("Grant mic, camera, location, contacts & calendar", fontWeight = FontWeight.Medium, fontSize = 13.5.sp)
+    }
+
+    Spacer(Modifier.height(14.dp))
+    Text("Sensors & vision", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = JarvisPalette.TextSecondary)
+    Spacer(Modifier.height(8.dp))
+    SheetGroupBox {
+        PermRow("Camera vision", "Real-world object & sign recognition", telemetry.cameraGranted) {
+            onRequestRuntimePermissions()
+        }
+        SheetDivider()
+        PermRow("GPS location", "Local weather & location context", telemetry.locationGranted) {
+            onRequestRuntimePermissions()
+        }
     }
 
     Spacer(Modifier.height(16.dp))

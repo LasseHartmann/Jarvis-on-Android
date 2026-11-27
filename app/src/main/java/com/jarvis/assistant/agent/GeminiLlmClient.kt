@@ -1,5 +1,6 @@
 package com.jarvis.assistant.agent
 
+import android.util.Base64
 import android.util.Log
 import com.jarvis.assistant.tools.ToolSpec
 import kotlinx.coroutines.Dispatchers
@@ -94,6 +95,132 @@ class GeminiLlmClient(
             acc.toResponse()
         }
     }
+
+    /**
+     * Multimodal vision call (JPEG inlineData -> Gemini 4) for Screen Vision and Camera Peek.
+     */
+    suspend fun analyzeImage(
+        jpegBytes: ByteArray,
+        prompt: String,
+        systemInstruction: String = "You are J.A.R.V.I.S. visual analysis module. Answer accurately and concisely based strictly on the image."
+    ): String = withContext(Dispatchers.IO) {
+        val cleanModel = model.trim().removePrefix("models/").ifBlank { AiProvider.GEMINI.defaultModel }
+        val url = "${baseUrl.trimEnd('/')}/models/$cleanModel:generateContent?key=${apiKey.trim()}"
+        val b64 = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+
+        val genConfig = JSONObject()
+            .put("temperature", 0.25)
+            .put("maxOutputTokens", 768)
+        val lower = cleanModel.lowercase()
+        if (lower.startsWith("gemini-4") || lower.startsWith("gemini-3")) {
+            genConfig.put("thinkingConfig", JSONObject().put("thinkingLevel", "LOW"))
+        }
+
+        val parts = JSONArray()
+            .put(
+                JSONObject().put(
+                    "inlineData",
+                    JSONObject()
+                        .put("mimeType", "image/jpeg")
+                        .put("data", b64)
+                )
+            )
+            .put(JSONObject().put("text", prompt))
+
+        val root = JSONObject()
+            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemInstruction))))
+            .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", parts)))
+            .put("generationConfig", genConfig)
+
+        val req = Request.Builder()
+            .url(url)
+            .post(root.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        httpClient.newCall(req).execute().use { resp ->
+            val bodyStr = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                val errMsg = extractErrorMessage(bodyStr).ifBlank { "HTTP ${resp.code}" }
+                throw IOException("Gemini Vision error (${resp.code}): $errMsg")
+            }
+            parseResponseBody(bodyStr).text.ifBlank { "No visual details returned." }
+        }
+    }
+
+    /**
+     * Live Google Search Grounding call using Gemini's built-in {"google_search": {}} tool.
+     * Kept separate from custom functionDeclarations as required by Gemini REST API.
+     */
+    suspend fun groundedWebSearch(query: String): String = withContext(Dispatchers.IO) {
+        val cleanModel = model.trim().removePrefix("models/").ifBlank { AiProvider.GEMINI.defaultModel }
+        val url = "${baseUrl.trimEnd('/')}/models/$cleanModel:generateContent?key=${apiKey.trim()}"
+
+        val genConfig = JSONObject()
+            .put("temperature", 0.2)
+            .put("maxOutputTokens", 768)
+        val lower = cleanModel.lowercase()
+        if (lower.startsWith("gemini-4") || lower.startsWith("gemini-3")) {
+            genConfig.put("thinkingConfig", JSONObject().put("thinkingLevel", "LOW"))
+        }
+
+        val root = JSONObject()
+            .put(
+                "systemInstruction",
+                JSONObject().put(
+                    "parts",
+                    JSONArray().put(
+                        JSONObject().put(
+                            "text",
+                            "Use Google Search grounding to answer with accurate, up-to-date facts. Reply concisely in plain text (no markdown) in the same language as the query."
+                        )
+                    )
+                )
+            )
+            .put(
+                "contents",
+                JSONArray().put(
+                    JSONObject()
+                        .put("role", "user")
+                        .put("parts", JSONArray().put(JSONObject().put("text", query)))
+                )
+            )
+            .put("tools", JSONArray().put(JSONObject().put("google_search", JSONObject())))
+            .put("generationConfig", genConfig)
+
+        val req = Request.Builder()
+            .url(url)
+            .post(root.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        httpClient.newCall(req).execute().use { resp ->
+            val bodyStr = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                val errMsg = extractErrorMessage(bodyStr).ifBlank { "HTTP ${resp.code}" }
+                throw IOException("Gemini Search Grounding error (${resp.code}): $errMsg")
+            }
+            val parsedText = parseResponseBody(bodyStr).text
+            val sources = extractGroundingSources(bodyStr)
+            if (sources.isNotEmpty()) {
+                "$parsedText\nSources: ${sources.joinToString(", ")}"
+            } else {
+                parsedText.ifBlank { "No live web answer found." }
+            }
+        }
+    }
+
+    internal fun extractGroundingSources(bodyStr: String): List<String> = runCatching {
+        val root = JSONObject(bodyStr)
+        val cand = root.optJSONArray("candidates")?.optJSONObject(0) ?: return emptyList()
+        val chunks = cand.optJSONObject("groundingMetadata")?.optJSONArray("groundingChunks") ?: return emptyList()
+        val titles = LinkedHashSet<String>()
+        for (i in 0 until chunks.length()) {
+            val web = chunks.optJSONObject(i)?.optJSONObject("web") ?: continue
+            val title = web.optString("title", "").trim()
+            if (title.isNotBlank()) titles.add(title)
+            if (titles.size >= 3) break
+        }
+        titles.toList()
+    }.getOrDefault(emptyList())
 
     internal class StreamAccumulator {
         val spokenText = StringBuilder()

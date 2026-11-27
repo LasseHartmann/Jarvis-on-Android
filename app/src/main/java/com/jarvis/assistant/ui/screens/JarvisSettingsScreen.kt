@@ -51,6 +51,8 @@ import com.jarvis.assistant.agent.AuditLogEntry
 import com.jarvis.assistant.agent.GeminiModel
 import com.jarvis.assistant.agent.HudColorTheme
 import com.jarvis.assistant.agent.JarvisMemory
+import com.jarvis.assistant.agent.JarvisProtocol
+import com.jarvis.assistant.agent.JarvisReminder
 import com.jarvis.assistant.agent.JarvisSettings
 import com.jarvis.assistant.agent.SpokenLanguage
 import com.jarvis.assistant.assist.JarvisAssistActivity
@@ -66,10 +68,14 @@ fun JarvisSettingsScreen(
     telemetry: DeviceTelemetry,
     memories: List<JarvisMemory>,
     auditLogs: List<AuditLogEntry>,
+    protocols: List<JarvisProtocol> = emptyList(),
+    reminders: List<JarvisReminder> = emptyList(),
     onUpdateSettings: ((JarvisSettings) -> JarvisSettings) -> Unit,
     onTestVoice: (SpokenLanguage?) -> Unit,
     onPermissionsUpdated: () -> Unit,
     onDeleteMemory: (Long) -> Unit,
+    onDeleteProtocol: (Long) -> Unit = {},
+    onCancelReminder: (Long) -> Unit = {},
     onClearAuditLogs: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -80,6 +86,9 @@ fun JarvisSettingsScreen(
     val runtimePermissions = remember {
         buildList {
             add(Manifest.permission.RECORD_AUDIO)
+            add(Manifest.permission.CAMERA)
+            add(Manifest.permission.ACCESS_FINE_LOCATION)
+            add(Manifest.permission.ACCESS_COARSE_LOCATION)
             add(Manifest.permission.READ_CONTACTS)
             add(Manifest.permission.CALL_PHONE)
             add(Manifest.permission.SEND_SMS)
@@ -282,7 +291,43 @@ fun JarvisSettingsScreen(
             }
         }
 
-        // GROUP 3: XIAOMI 15T PRO
+        // GROUP 3: PROACTIVE & ECOSYSTEM
+        item {
+            val haConfigured = settings.homeAssistantUrl.isNotBlank() && settings.homeAssistantToken.isNotBlank()
+            val pcConfigured = settings.pcBridgeUrl.isNotBlank() && settings.pcBridgeToken.isNotBlank()
+            val ecosystemLabel = when {
+                haConfigured && pcConfigured -> "HA · PC"
+                haConfigured -> "Home Assistant"
+                pcConfigured -> "PC Bridge"
+                else -> "Configure"
+            }
+            SettingsGroup(title = "Proactive & ecosystem") {
+                ToggleRow(
+                    icon = JarvisIcons.Speaker,
+                    title = "Bluetooth message whisper",
+                    checked = settings.bluetoothWhisperEnabled,
+                    accent = accent,
+                    onCheckedChange = { v -> onUpdateSettings { it.copy(bluetoothWhisperEnabled = v) } }
+                )
+                GroupDivider()
+                NavigationRow(
+                    icon = JarvisIcons.Sliders,
+                    title = "Ecosystem & integrations",
+                    value = ecosystemLabel,
+                    valueColor = if (haConfigured || pcConfigured) JarvisPalette.Success else JarvisPalette.TextSecondary,
+                    onClick = { activeSheet = ActiveSettingsSheet.ECOSYSTEM }
+                )
+                GroupDivider()
+                NavigationRow(
+                    icon = JarvisIcons.Clock,
+                    title = "Routines & reminders",
+                    value = "${protocols.size} · ${reminders.size} active",
+                    onClick = { activeSheet = ActiveSettingsSheet.ROUTINES }
+                )
+            }
+        }
+
+        // GROUP 4: XIAOMI 15T PRO
         item {
             SettingsGroup(title = "Xiaomi 15T Pro") {
                 NavigationRow(
@@ -332,12 +377,16 @@ fun JarvisSettingsScreen(
             telemetry = telemetry,
             memories = memories,
             auditLogs = auditLogs,
+            protocols = protocols,
+            reminders = reminders,
             accent = accent,
             onDismiss = { activeSheet = null },
             onUpdateSettings = onUpdateSettings,
             onTestVoice = onTestVoice,
             onRequestRuntimePermissions = { permLauncher.launch(runtimePermissions) },
             onDeleteMemory = onDeleteMemory,
+            onDeleteProtocol = onDeleteProtocol,
+            onCancelReminder = onCancelReminder,
             onClearAuditLogs = onClearAuditLogs
         )
     }

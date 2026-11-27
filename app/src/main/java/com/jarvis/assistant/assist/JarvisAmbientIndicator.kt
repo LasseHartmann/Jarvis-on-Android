@@ -71,6 +71,19 @@ object AmbientPillStateResolver {
         return when {
             lower.startsWith("opening ") || lower.startsWith("tapping ") || lower.startsWith("scrolling ") ->
                 raw.take(20)
+            lower.contains("analyze_screen_vision") -> "Inspecting screen"
+            lower.contains("look_with_camera") -> "Using camera"
+            lower.contains("live_web_answer") -> "Searching web"
+            lower.contains("fetch_webpage") -> "Reading page"
+            lower.contains("get_current_location") -> "Locating"
+            lower.contains("get_weather") -> "Checking weather"
+            lower.contains("send_whatsapp") -> "WhatsApp"
+            lower.contains("play_music") -> "Starting music"
+            lower.contains("control_ir_device") -> "IR blaster"
+            lower.contains("smart_home") -> "Smart home"
+            lower.contains("pc_bridge") -> "PC bridge"
+            lower.contains("protocol") -> "Updating routine"
+            lower.contains("reminder") -> "Scheduling"
             lower.contains("open_app") -> "Opening app"
             lower.contains("tap_element") || lower.contains("tap_coordinates") -> "Tapping"
             lower.contains("type_text") -> "Typing"

@@ -214,6 +214,16 @@ data class JarvisProtocol(
     val isBuiltIn: Boolean = false
 )
 
+data class JarvisReminder(
+    val id: Long = 0L,
+    val title: String,
+    val message: String,
+    val triggerAtMs: Long,
+    val repeatDaily: Boolean = false,
+    val isBriefing: Boolean = false,
+    val active: Boolean = true
+)
+
 data class JarvisSettings(
     val provider: AiProvider = AiProvider.GEMINI,
     val geminiApiKey: String = "",
@@ -239,7 +249,12 @@ data class JarvisSettings(
     val autoDismissAfterReply: Boolean = true,
     val languageMode: JarvisLanguageMode = JarvisLanguageMode.BILINGUAL_EN_DE,
     val wakeWordEnabled: Boolean = true,
-    val wakeWordPauseScreenOff: Boolean = true
+    val wakeWordPauseScreenOff: Boolean = true,
+    val bluetoothWhisperEnabled: Boolean = true,
+    val homeAssistantUrl: String = "",
+    val homeAssistantToken: String = "",
+    val pcBridgeUrl: String = "",
+    val pcBridgeToken: String = ""
 ) {
     fun hasActiveCloudKey(): Boolean = when (provider) {
         AiProvider.GEMINI -> geminiApiKey.isNotBlank()

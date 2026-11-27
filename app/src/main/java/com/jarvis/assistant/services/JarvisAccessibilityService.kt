@@ -2,6 +2,7 @@ package com.jarvis.assistant.services
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Build
@@ -9,6 +10,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
@@ -16,6 +18,7 @@ import com.jarvis.assistant.JarvisApplication
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
+import java.io.ByteArrayOutputStream
 
 class JarvisAccessibilityService : AccessibilityService() {
 
@@ -276,6 +279,68 @@ class JarvisAccessibilityService : AccessibilityService() {
         val ok = performGlobalAction(code)
         Log.i(TAG, "performGlobalAction action=$normalized ok=$ok")
         return ok to if (ok) "Executed system action: $normalized" else "System rejected global action: $normalized"
+    }
+
+    /**
+     * Captures a compressed JPEG screenshot of the current screen via Android 11+ AccessibilityService.takeScreenshot
+     * (requires zero MediaProjection dialog). Automatically refuses banking/password apps for privacy.
+     */
+    suspend fun captureScreenJpeg(maxDimension: Int = 1080, quality: Int = 78): Pair<ByteArray?, String> {
+        val pkg = currentForegroundPackage
+        if (ScreenTreeSerializer.isSensitivePackage(pkg)) {
+            return null to "Screen vision blocked on protected financial/password app ($pkg) under the Stark Security Shield."
+        }
+        val deferred = CompletableDeferred<Pair<ByteArray?, String>>()
+        try {
+            takeScreenshot(
+                Display.DEFAULT_DISPLAY,
+                mainExecutor,
+                object : TakeScreenshotCallback {
+                    override fun onSuccess(screenshot: ScreenshotResult) {
+                        val result = runCatching {
+                            val hwBuf = screenshot.hardwareBuffer
+                            val wrapped = Bitmap.wrapHardwareBuffer(hwBuf, screenshot.colorSpace)
+                            hwBuf.close()
+                            if (wrapped == null) {
+                                return@runCatching null to "Hardware screenshot buffer could not be decoded."
+                            }
+                            val soft = wrapped.copy(Bitmap.Config.ARGB_8888, false)
+                            wrapped.recycle()
+                            val scaled = scaleBitmapIfNeeded(soft, maxDimension)
+                            if (scaled !== soft) soft.recycle()
+                            val baos = ByteArrayOutputStream()
+                            scaled.compress(Bitmap.CompressFormat.JPEG, quality.coerceIn(45, 92), baos)
+                            val w = scaled.width
+                            val h = scaled.height
+                            scaled.recycle()
+                            val bytes = baos.toByteArray()
+                            Log.i(TAG, "captureScreenJpeg ok: ${w}x${h} (${bytes.size / 1024} KB) pkg=$pkg")
+                            bytes to "Captured screen (${w}x${h}) of $pkg."
+                        }.getOrElse { err ->
+                            null to "Screenshot decode error: ${err.message}"
+                        }
+                        deferred.complete(result)
+                    }
+
+                    override fun onFailure(errorCode: Int) {
+                        deferred.complete(null to "Android takeScreenshot failed (code=$errorCode).")
+                    }
+                }
+            )
+        } catch (err: Throwable) {
+            return null to "Unable to request screen capture: ${err.message}"
+        }
+        return withTimeoutOrNull(4_500L) { deferred.await() }
+            ?: (null to "Screen capture timed out.")
+    }
+
+    private fun scaleBitmapIfNeeded(src: Bitmap, maxDim: Int): Bitmap {
+        val longest = maxOf(src.width, src.height)
+        if (longest <= maxDim) return src
+        val ratio = maxDim.toFloat() / longest.toFloat()
+        val newW = (src.width * ratio).toInt().coerceAtLeast(1)
+        val newH = (src.height * ratio).toInt().coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(src, newW, newH, true)
     }
 
     private suspend fun dispatchTap(x: Float, y: Float, durationMs: Long = 60L): Boolean {

@@ -6,6 +6,7 @@ import com.jarvis.assistant.agent.AuditLogEntry
 import com.jarvis.assistant.agent.ChatMessage
 import com.jarvis.assistant.agent.JarvisMemory
 import com.jarvis.assistant.agent.JarvisProtocol
+import com.jarvis.assistant.agent.JarvisReminder
 import com.jarvis.assistant.agent.MessageRole
 import com.jarvis.assistant.agent.RiskLevel
 import com.jarvis.assistant.agent.ToolExecutionTrace
@@ -20,6 +21,19 @@ interface JarvisStore {
     fun upsertMemory(key: String, content: String, category: String = "general")
     fun deleteMemoryByKey(key: String): Boolean
     fun getProtocolsSnapshot(): List<JarvisProtocol>
+    fun addCustomProtocol(name: String, triggerPhrase: String, description: String, commandPrompt: String) = Unit
+    fun deleteProtocolByName(nameOrTrigger: String): Boolean = false
+    fun getRemindersSnapshot(): List<JarvisReminder> = emptyList()
+    fun addReminder(
+        title: String,
+        message: String,
+        triggerAtMs: Long,
+        repeatDaily: Boolean = false,
+        isBriefing: Boolean = false
+    ): Long = -1L
+    fun updateReminderTrigger(id: Long, nextTriggerMs: Long) = Unit
+    fun deactivateReminder(id: Long) = Unit
+    fun deleteReminder(id: Long): Boolean = false
     fun logAudit(
         toolName: String,
         argumentsJson: String,
@@ -45,6 +59,9 @@ class JarvisRepository(private val dbHelper: JarvisDatabaseHelper) : JarvisStore
 
     private val _protocols = MutableStateFlow(loadAllProtocols())
     val protocols: StateFlow<List<JarvisProtocol>> = _protocols.asStateFlow()
+
+    private val _reminders = MutableStateFlow(loadActiveReminders())
+    val reminders: StateFlow<List<JarvisReminder>> = _reminders.asStateFlow()
 
     fun addMessage(message: ChatMessage): Long = synchronized(lock) {
         val db = dbHelper.writableDatabase
@@ -107,7 +124,7 @@ class JarvisRepository(private val dbHelper: JarvisDatabaseHelper) : JarvisStore
 
     override fun getProtocolsSnapshot(): List<JarvisProtocol> = _protocols.value
 
-    fun addCustomProtocol(name: String, triggerPhrase: String, description: String, commandPrompt: String) = synchronized(lock) {
+    override fun addCustomProtocol(name: String, triggerPhrase: String, description: String, commandPrompt: String) = synchronized(lock) {
         val values = ContentValues().apply {
             put("name", name.trim())
             put("trigger_phrase", triggerPhrase.trim().lowercase())
@@ -124,6 +141,17 @@ class JarvisRepository(private val dbHelper: JarvisDatabaseHelper) : JarvisStore
         _protocols.value = loadAllProtocols()
     }
 
+    override fun deleteProtocolByName(nameOrTrigger: String): Boolean = synchronized(lock) {
+        val norm = nameOrTrigger.trim().lowercase()
+        val rows = dbHelper.writableDatabase.delete(
+            JarvisDatabaseHelper.TABLE_PROTOCOLS,
+            "(LOWER(name) = ? OR LOWER(trigger_phrase) = ?) AND is_built_in = 0",
+            arrayOf(norm, norm)
+        )
+        _protocols.value = loadAllProtocols()
+        rows > 0
+    }
+
     fun deleteProtocol(id: Long) = synchronized(lock) {
         dbHelper.writableDatabase.delete(
             JarvisDatabaseHelper.TABLE_PROTOCOLS,
@@ -131,6 +159,60 @@ class JarvisRepository(private val dbHelper: JarvisDatabaseHelper) : JarvisStore
             arrayOf(id.toString())
         )
         _protocols.value = loadAllProtocols()
+    }
+
+    override fun getRemindersSnapshot(): List<JarvisReminder> = _reminders.value
+
+    override fun addReminder(
+        title: String,
+        message: String,
+        triggerAtMs: Long,
+        repeatDaily: Boolean,
+        isBriefing: Boolean
+    ): Long = synchronized(lock) {
+        val values = ContentValues().apply {
+            put("title", title.trim())
+            put("message", message.trim())
+            put("trigger_at_ms", triggerAtMs)
+            put("repeat_daily", if (repeatDaily) 1 else 0)
+            put("is_briefing", if (isBriefing) 1 else 0)
+            put("active", 1)
+        }
+        val id = dbHelper.writableDatabase.insert(JarvisDatabaseHelper.TABLE_REMINDERS, null, values)
+        _reminders.value = loadActiveReminders()
+        id
+    }
+
+    override fun updateReminderTrigger(id: Long, nextTriggerMs: Long) = synchronized(lock) {
+        val values = ContentValues().apply { put("trigger_at_ms", nextTriggerMs) }
+        dbHelper.writableDatabase.update(
+            JarvisDatabaseHelper.TABLE_REMINDERS,
+            values,
+            "id = ?",
+            arrayOf(id.toString())
+        )
+        _reminders.value = loadActiveReminders()
+    }
+
+    override fun deactivateReminder(id: Long) = synchronized(lock) {
+        val values = ContentValues().apply { put("active", 0) }
+        dbHelper.writableDatabase.update(
+            JarvisDatabaseHelper.TABLE_REMINDERS,
+            values,
+            "id = ?",
+            arrayOf(id.toString())
+        )
+        _reminders.value = loadActiveReminders()
+    }
+
+    override fun deleteReminder(id: Long): Boolean = synchronized(lock) {
+        val rows = dbHelper.writableDatabase.delete(
+            JarvisDatabaseHelper.TABLE_REMINDERS,
+            "id = ?",
+            arrayOf(id.toString())
+        )
+        _reminders.value = loadActiveReminders()
+        rows > 0
     }
 
     override fun logAudit(
@@ -248,6 +330,32 @@ class JarvisRepository(private val dbHelper: JarvisDatabaseHelper) : JarvisStore
                         isBuiltIn = cursor.getInt(5) == 1
                     )
                 )
+            }
+        }
+        return list
+    }
+
+    private fun loadActiveReminders(): List<JarvisReminder> {
+        val list = mutableListOf<JarvisReminder>()
+        val db = dbHelper.readableDatabase
+        runCatching {
+            db.rawQuery(
+                "SELECT id, title, message, trigger_at_ms, repeat_daily, is_briefing, active FROM ${JarvisDatabaseHelper.TABLE_REMINDERS} WHERE active = 1 ORDER BY trigger_at_ms ASC",
+                null
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    list.add(
+                        JarvisReminder(
+                            id = cursor.getLong(0),
+                            title = cursor.getString(1),
+                            message = cursor.getString(2),
+                            triggerAtMs = cursor.getLong(3),
+                            repeatDaily = cursor.getInt(4) == 1,
+                            isBriefing = cursor.getInt(5) == 1,
+                            active = cursor.getInt(6) == 1
+                        )
+                    )
+                }
             }
         }
         return list

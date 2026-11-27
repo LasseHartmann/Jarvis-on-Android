@@ -16,6 +16,7 @@ import com.jarvis.assistant.data.JarvisRepository
 import com.jarvis.assistant.data.SecureSettingsStore
 import com.jarvis.assistant.device.DeviceTelemetryMonitor
 import com.jarvis.assistant.device.InstalledAppsRepository
+import com.jarvis.assistant.services.ReminderScheduler
 import com.jarvis.assistant.tools.ToolRegistry
 import com.jarvis.assistant.voice.JarvisVoiceEngine
 import com.jarvis.assistant.voice.StarkCue
@@ -42,6 +43,7 @@ class JarvisAppContainer(context: Context) {
         appsRepo = installedAppsRepository,
         telemetryMonitor = telemetryMonitor,
         store = repository,
+        settingsProvider = { settingsStore.current() },
         prepareScreenForPilot = {
             if (::taskCoordinator.isInitialized) {
                 taskCoordinator.dismissOverlayForScreenPilot()
@@ -109,6 +111,9 @@ class JarvisApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         container = JarvisAppContainer(this)
+        runCatching {
+            ReminderScheduler.rescheduleAllActive(this, container.repository)
+        }
     }
 
     override fun onTerminate() {

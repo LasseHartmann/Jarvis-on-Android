@@ -38,6 +38,8 @@ class MainActivity : ComponentActivity() {
             val telemetry by viewModel.telemetry.collectAsState()
             val memories by viewModel.memories.collectAsState()
             val auditLogs by viewModel.auditLogs.collectAsState()
+            val protocols by viewModel.protocols.collectAsState()
+            val reminders by viewModel.reminders.collectAsState()
 
             StarkTheme(finish = settings.hudColorTheme) {
                 Scaffold(
@@ -49,10 +51,14 @@ class MainActivity : ComponentActivity() {
                         telemetry = telemetry,
                         memories = memories,
                         auditLogs = auditLogs,
+                        protocols = protocols,
+                        reminders = reminders,
                         onUpdateSettings = viewModel::updateSettings,
                         onTestVoice = viewModel::testVoiceSample,
                         onPermissionsUpdated = viewModel::refreshTelemetry,
                         onDeleteMemory = viewModel::deleteMemory,
+                        onDeleteProtocol = viewModel::deleteProtocol,
+                        onCancelReminder = viewModel::cancelReminder,
                         onClearAuditLogs = viewModel::clearAuditLogs,
                         modifier = Modifier.padding(innerPadding)
                     )

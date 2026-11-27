@@ -1,6 +1,7 @@
 package com.jarvis.assistant.tools
 
 import android.content.Context
+import com.jarvis.assistant.agent.JarvisSettings
 import com.jarvis.assistant.agent.ToolCall
 import com.jarvis.assistant.agent.ToolResult
 import com.jarvis.assistant.data.JarvisStore
@@ -18,6 +19,7 @@ class ToolRegistry(
     appsRepo: InstalledAppsRepository,
     telemetryMonitor: DeviceTelemetryMonitor,
     store: JarvisStore,
+    settingsProvider: () -> JarvisSettings = { JarvisSettings() },
     prepareScreenForPilot: suspend () -> Unit = {}
 ) : ToolExecutor {
 
@@ -33,10 +35,20 @@ class ToolRegistry(
             SetDndTool(context),
             MediaControlTool(context),
             OpenSystemPanelTool(context),
-            // App & Web Navigation
+            // Multimodal Vision (Screen & Rear Camera)
+            AnalyzeScreenVisionTool(settingsProvider, prepareScreenForPilot),
+            LookWithCameraTool(context, settingsProvider),
+            // Live Web Grounding, GPS & Weather
+            LiveWebAnswerTool(settingsProvider),
+            FetchWebpageTool(),
+            GetCurrentLocationTool(context),
+            GetWeatherTool(context),
+            // App, Navigation & Direct Media/Messaging
             ListInstalledAppsTool(appsRepo),
             OpenAppTool(appsRepo, prepareScreenForPilot),
             NavigateToTool(context, prepareScreenForPilot),
+            SendWhatsAppTool(context, prepareScreenForPilot),
+            PlayMusicTool(context, prepareScreenForPilot),
             OpenUrlTool(context, prepareScreenForPilot),
             WebSearchTool(context, prepareScreenForPilot),
             // Accessibility Screen Pilot
@@ -54,19 +66,29 @@ class ToolRegistry(
             GetNotificationsTool(),
             DismissNotificationTool(),
             ReplyNotificationTool(),
-            // Productivity & Clock
+            // Productivity, Clock & Scheduled Reminders
             SetAlarmTool(context),
             SetTimerTool(context),
+            ScheduleReminderTool(context, store),
+            ListRemindersTool(store),
+            CancelReminderTool(context, store),
             GetCalendarEventsTool(context),
             CreateCalendarEventTool(context),
             ClipboardTool(context),
             // Suit Diagnostics
             GetDeviceDiagnosticsTool(telemetryMonitor),
-            // Memory & Protocols
+            // Hardware IR Blaster & Smart Home / PC Ecosystem
+            ControlIrDeviceTool(context),
+            ListSmartHomeEntitiesTool(settingsProvider),
+            SmartHomeControlTool(settingsProvider),
+            PcBridgeActionTool(settingsProvider),
+            // Memory & Stark Protocols
             RememberFactTool(store),
             RecallMemoriesTool(store),
             ForgetMemoryTool(store),
-            ListProtocolsTool(store)
+            ListProtocolsTool(store),
+            CreateProtocolTool(store),
+            DeleteProtocolTool(store)
         )
         tools = list.associateBy { it.spec.name }
     }

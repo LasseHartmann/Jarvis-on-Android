@@ -90,7 +90,12 @@ class SecureSettingsStore(context: Context) {
             autoDismissAfterReply = prefs.getBoolean(KEY_AUTO_DISMISS, true),
             languageMode = languageMode,
             wakeWordEnabled = prefs.getBoolean(KEY_WAKE_WORD_ENABLED, true),
-            wakeWordPauseScreenOff = prefs.getBoolean(KEY_WAKE_WORD_PAUSE_SCREEN_OFF, true)
+            wakeWordPauseScreenOff = prefs.getBoolean(KEY_WAKE_WORD_PAUSE_SCREEN_OFF, true),
+            bluetoothWhisperEnabled = prefs.getBoolean(KEY_BT_WHISPER, true),
+            homeAssistantUrl = prefs.getString(KEY_HA_URL, "") ?: "",
+            homeAssistantToken = decryptSecret(prefs.getString(KEY_HA_TOKEN, "") ?: ""),
+            pcBridgeUrl = prefs.getString(KEY_PC_BRIDGE_URL, "") ?: "",
+            pcBridgeToken = decryptSecret(prefs.getString(KEY_PC_BRIDGE_TOKEN, "") ?: "")
         )
     }
 
@@ -121,6 +126,11 @@ class SecureSettingsStore(context: Context) {
             .putString(KEY_LANGUAGE_MODE, s.languageMode.name)
             .putBoolean(KEY_WAKE_WORD_ENABLED, s.wakeWordEnabled)
             .putBoolean(KEY_WAKE_WORD_PAUSE_SCREEN_OFF, s.wakeWordPauseScreenOff)
+            .putBoolean(KEY_BT_WHISPER, s.bluetoothWhisperEnabled)
+            .putString(KEY_HA_URL, s.homeAssistantUrl.trim())
+            .putString(KEY_HA_TOKEN, encryptSecret(s.homeAssistantToken.trim()))
+            .putString(KEY_PC_BRIDGE_URL, s.pcBridgeUrl.trim())
+            .putString(KEY_PC_BRIDGE_TOKEN, encryptSecret(s.pcBridgeToken.trim()))
             .apply()
     }
 
@@ -213,5 +223,10 @@ class SecureSettingsStore(context: Context) {
         private const val KEY_LANGUAGE_MODE = "language_mode"
         private const val KEY_WAKE_WORD_ENABLED = "wake_word_enabled"
         private const val KEY_WAKE_WORD_PAUSE_SCREEN_OFF = "wake_word_pause_screen_off"
+        private const val KEY_BT_WHISPER = "bluetooth_whisper_enabled"
+        private const val KEY_HA_URL = "home_assistant_url"
+        private const val KEY_HA_TOKEN = "home_assistant_token"
+        private const val KEY_PC_BRIDGE_URL = "pc_bridge_url"
+        private const val KEY_PC_BRIDGE_TOKEN = "pc_bridge_token"
     }
 }

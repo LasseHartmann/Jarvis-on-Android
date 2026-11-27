@@ -7,10 +7,13 @@ import com.jarvis.assistant.JarvisApplication
 import com.jarvis.assistant.agent.AuditLogEntry
 import com.jarvis.assistant.agent.JarvisLanguageMode
 import com.jarvis.assistant.agent.JarvisMemory
+import com.jarvis.assistant.agent.JarvisProtocol
+import com.jarvis.assistant.agent.JarvisReminder
 import com.jarvis.assistant.agent.JarvisSettings
 import com.jarvis.assistant.agent.SpokenLanguage
 import com.jarvis.assistant.device.DeviceTelemetry
 import com.jarvis.assistant.services.JarvisWakeWordService
+import com.jarvis.assistant.services.ReminderScheduler
 import com.jarvis.assistant.voice.JarvisSpeechOptions
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +28,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     val telemetry: StateFlow<DeviceTelemetry> = container.telemetryMonitor.telemetry
     val memories: StateFlow<List<JarvisMemory>> = container.repository.memories
     val auditLogs: StateFlow<List<AuditLogEntry>> = container.repository.auditLogs
+    val protocols: StateFlow<List<JarvisProtocol>> = container.repository.protocols
+    val reminders: StateFlow<List<JarvisReminder>> = container.repository.reminders
 
     init {
         viewModelScope.launch {
@@ -76,6 +81,15 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun deleteMemory(id: Long) {
         container.repository.deleteMemoryById(id)
+    }
+
+    fun deleteProtocol(id: Long) {
+        container.repository.deleteProtocol(id)
+    }
+
+    fun cancelReminder(id: Long) {
+        ReminderScheduler.cancelAlarm(getApplication(), id)
+        container.repository.deleteReminder(id)
     }
 
     fun clearAuditLogs() {

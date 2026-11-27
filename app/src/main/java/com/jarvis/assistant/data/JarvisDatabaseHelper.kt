@@ -61,12 +61,30 @@ class JarvisDatabaseHelper(context: Context) : SQLiteOpenHelper(
             )
             """.trimIndent()
         )
-
+        createRemindersTable(db)
         seedDefaultProtocols(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Reserved for future schema migrations
+        if (oldVersion < 2) {
+            createRemindersTable(db)
+        }
+    }
+
+    private fun createRemindersTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS $TABLE_REMINDERS (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                trigger_at_ms INTEGER NOT NULL,
+                repeat_daily INTEGER NOT NULL DEFAULT 0,
+                is_briefing INTEGER NOT NULL DEFAULT 0,
+                active INTEGER NOT NULL DEFAULT 1
+            )
+            """.trimIndent()
+        )
     }
 
     private fun seedDefaultProtocols(db: SQLiteDatabase) {
@@ -116,11 +134,12 @@ class JarvisDatabaseHelper(context: Context) : SQLiteOpenHelper(
 
     companion object {
         const val DB_NAME = "jarvis_core.db"
-        const val DB_VERSION = 1
+        const val DB_VERSION = 2
 
         const val TABLE_MESSAGES = "chat_messages"
         const val TABLE_MEMORIES = "memories"
         const val TABLE_AUDIT = "audit_logs"
         const val TABLE_PROTOCOLS = "protocols"
+        const val TABLE_REMINDERS = "reminders"
     }
 }

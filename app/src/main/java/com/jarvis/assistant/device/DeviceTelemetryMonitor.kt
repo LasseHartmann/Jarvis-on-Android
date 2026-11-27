@@ -52,7 +52,9 @@ data class DeviceTelemetry(
     val callGranted: Boolean = false,
     val smsGranted: Boolean = false,
     val calendarGranted: Boolean = false,
-    val postNotificationsGranted: Boolean = false
+    val postNotificationsGranted: Boolean = false,
+    val cameraGranted: Boolean = false,
+    val locationGranted: Boolean = false
 ) {
     val readinessScorePercent: Int
         get() {
@@ -176,7 +178,10 @@ class DeviceTelemetryMonitor(private val context: Context) {
             calendarGranted = hasPermission(Manifest.permission.READ_CALENDAR) && hasPermission(Manifest.permission.WRITE_CALENDAR),
             postNotificationsGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 hasPermission(Manifest.permission.POST_NOTIFICATIONS)
-            } else true
+            } else true,
+            cameraGranted = hasPermission(Manifest.permission.CAMERA),
+            locationGranted = hasPermission(Manifest.permission.ACCESS_FINE_LOCATION) ||
+                hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
         )
     }
 

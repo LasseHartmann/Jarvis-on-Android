@@ -18,5 +18,6 @@ class JarvisBootReceiver : BroadcastReceiver() {
         if (settings.wakeWordEnabled) {
             JarvisWakeWordService.syncWithSettings(context, settings)
         }
+        ReminderScheduler.rescheduleAllActive(context, app.container.repository)
     }
 }

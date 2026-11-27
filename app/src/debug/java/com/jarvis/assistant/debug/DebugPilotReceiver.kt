@@ -190,6 +190,46 @@ class DebugPilotReceiver : BroadcastReceiver() {
                         }
                     }
 
+                    "test_mark2" -> {
+                        val app = context.applicationContext as? JarvisApplication
+                        if (app != null) {
+                            val registry = app.container.toolRegistry
+                            val irMgr = context.getSystemService(Context.CONSUMER_IR_SERVICE) as? android.hardware.ConsumerIrManager
+                            val hasIr = irMgr?.hasIrEmitter() == true
+                            val ranges = runCatching {
+                                irMgr?.carrierFrequencies?.joinToString { "${it.minFrequency}-${it.maxFrequency}Hz" }
+                            }.getOrNull().orEmpty()
+                            Log.i(TAG, "MARK2_TOOLS: count=${registry.allSpecs().size} hasIr=$hasIr ranges=[$ranges]")
+
+                            val weather = registry.execute(
+                                com.jarvis.assistant.agent.ToolCall(
+                                    id = "dbg_weather",
+                                    name = "get_weather",
+                                    arguments = org.json.JSONObject().put("location", "Munich")
+                                )
+                            )
+                            Log.i(TAG, "MARK2_WEATHER: ok=${weather.success} out=${weather.output.replace('\n', ' ')}")
+
+                            val liveWeb = registry.execute(
+                                com.jarvis.assistant.agent.ToolCall(
+                                    id = "dbg_web",
+                                    name = "live_web_answer",
+                                    arguments = org.json.JSONObject().put("query", "Who is the current mayor of Munich?")
+                                )
+                            )
+                            Log.i(TAG, "MARK2_WEB: ok=${liveWeb.success} out=${liveWeb.output.take(260).replace('\n', ' ')}")
+
+                            val vision = registry.execute(
+                                com.jarvis.assistant.agent.ToolCall(
+                                    id = "dbg_vision",
+                                    name = "analyze_screen_vision",
+                                    arguments = org.json.JSONObject().put("question", "Describe what is currently on this screen in one short sentence.")
+                                )
+                            )
+                            Log.i(TAG, "MARK2_VISION: ok=${vision.success} out=${vision.output.take(260).replace('\n', ' ')}")
+                        }
+                    }
+
                     else -> Log.w(TAG, "RESULT: unknown action=$action")
                 }
             } finally {
